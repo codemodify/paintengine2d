@@ -18,6 +18,8 @@ type CPUDevice struct {
 	verbs    []raster.Verb
 	pts      []raster.Vec2
 	cover    []uint16
+	// outlineStore reuses transformed stroke outlines across draw calls.
+	outlineStore [][]raster.Vec2
 }
 
 // NewCPUDevice wraps img. The image must outlive the device. Passing nil
@@ -40,7 +42,7 @@ func (d *CPUDevice) Clear(c Color) { d.img.Clear(c) }
 
 // Fill implements [Device].
 func (d *CPUDevice) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
-	if path == nil || path.Empty() || d.img.Width == 0 || d.img.Height == 0 {
+	if path == nil || path.Empty() || d.img.Width == 0 || d.img.Height == 0 || !xform.Finite() {
 		return
 	}
 	if d.fillAxisAlignedRect(path, xform, paint, clip) {
@@ -57,19 +59,24 @@ func (d *CPUDevice) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 
 // Stroke implements [Device].
 func (d *CPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
-	if path == nil || path.Empty() || d.img.Width == 0 || d.img.Height == 0 {
+	if path == nil || path.Empty() || d.img.Width == 0 || d.img.Height == 0 || !xform.Finite() {
 		return
 	}
 	st := paint.Stroke.normalized()
 	if st.Width <= 0 {
 		return
 	}
+	scale := xform.ApproxScale()
+	if !finite32(scale) || scale < 1e-8 {
+		return
+	}
+	// Flatten in user space at a tolerance that is ~0.2 px after xform.
+	tol := flattenTol() / scale
 	// Expand in user space, then transform the outline (stroke width follows
 	// the current matrix, matching Skia / SVG).
 	d.packPath(path)
-	var userContours [][]raster.Vec2
-	var userClosed []bool
-	raster.Flatten(d.verbs, d.pts, flattenTol(), &userContours, &userClosed)
+	raster.Flatten(d.verbs, d.pts, tol, &d.contours, &d.closed)
+	userContours, userClosed := d.contours, d.closed
 	if len(st.Dash) > 0 {
 		userContours, userClosed = raster.Dash(userContours, userClosed, st.Dash, st.DashOffset)
 	}
@@ -83,25 +90,38 @@ func (d *CPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if len(outlines) == 0 {
 		return
 	}
-	d.contours = d.contours[:0]
-	d.closed = d.closed[:0]
-	for _, c := range outlines {
-		tc := make([]raster.Vec2, len(c))
-		for i, p := range c {
-			q := xform.Transform(Point{p.X, p.Y})
-			tc[i] = raster.Vec2{X: q.X, Y: q.Y}
-		}
-		d.contours = append(d.contours, tc)
-		d.closed = append(d.closed, true)
-	}
+	d.storeTransformed(outlines, xform)
 	d.edges = raster.BuildEdges(d.contours, d.edges)
 	d.ras.ResetEdges(d.edges)
 	d.rasterFill(paint, xform, clip, raster.FillNonZero)
 }
 
+func (d *CPUDevice) storeTransformed(outlines [][]raster.Vec2, xform Matrix) {
+	for len(d.outlineStore) < len(outlines) {
+		d.outlineStore = append(d.outlineStore, nil)
+	}
+	d.contours = d.contours[:0]
+	d.closed = d.closed[:0]
+	for i, c := range outlines {
+		tc := d.outlineStore[i]
+		if cap(tc) < len(c) {
+			tc = make([]raster.Vec2, len(c))
+		} else {
+			tc = tc[:len(c)]
+		}
+		for j, p := range c {
+			q := xform.Transform(Point{p.X, p.Y})
+			tc[j] = raster.Vec2{X: q.X, Y: q.Y}
+		}
+		d.outlineStore[i] = tc
+		d.contours = append(d.contours, tc)
+		d.closed = append(d.closed, true)
+	}
+}
+
 // Blit implements [Device].
 func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip) {
-	if src == nil || src.Width == 0 || src.Height == 0 || dstRect.Empty() {
+	if src == nil || src.Width == 0 || src.Height == 0 || dstRect.Empty() || !xform.Finite() {
 		return
 	}
 	srcRect = srcRect.Canon()

@@ -86,6 +86,53 @@ func BenchmarkImageBlit(b *testing.B) {
 	}
 }
 
+func BenchmarkFillCircleUI(b *testing.B) {
+	img := NewImage(64, 64)
+	ctx := NewContext(img)
+	p := Fill(RGB(0.2, 0.5, 0.9))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawCircle(Pt(32, 32), 14, p)
+	}
+}
+
+func BenchmarkStrokeRoundRectUI(b *testing.B) {
+	img := NewImage(128, 48)
+	ctx := NewContext(img)
+	paint := Paint{Color: White, Style: StyleStroke, Stroke: Stroke{Width: 2, Cap: CapRound, Join: JoinRound, MiterLimit: 4}}
+	r := XYWH(8, 8, 112, 32)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawRoundRect(r, 6, 6, paint)
+	}
+}
+
+func BenchmarkDrawLabel(b *testing.B) {
+	img := NewImage(80, 20)
+	ctx := NewContext(img)
+	atlas := NewBitmapAtlas(White)
+	paint := Paint{Color: White, Filter: FilterNearest}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawLabel("READY", atlas, Pt(4, 4), paint)
+	}
+}
+
+func BenchmarkClipPathRoundRect(b *testing.B) {
+	img := NewImage(256, 256)
+	p := RoundRectPath(XYWH(40, 40, 176, 176), 16, 16)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx := NewContext(img)
+		ctx.ClipPath(p)
+		ctx.FillRect(XYWH(0, 0, 256, 256))
+	}
+}
+
 func blobPath() *Path {
 	p := NewPath()
 	p.MoveTo(80, 260)

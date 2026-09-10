@@ -226,9 +226,20 @@ func appendWedge(dst *[]Vec2, c, from, to Vec2, radius float32, _ bool) {
 	for sweep < -math.Pi {
 		sweep += 2 * math.Pi
 	}
-	steps := int(math.Ceil(math.Abs(sweep) / (math.Pi / 8)))
+	// Chord error ~0.35 px: more steps on thick UI strokes, not a fixed 22.5°.
+	step := 0.35 / math.Max(float64(radius), 0.35)
+	if step > math.Pi/6 {
+		step = math.Pi / 6
+	}
+	if step < math.Pi/32 {
+		step = math.Pi / 32
+	}
+	steps := int(math.Ceil(math.Abs(sweep) / step))
 	if steps < 1 {
 		steps = 1
+	}
+	if steps > 64 {
+		steps = 64
 	}
 	for i := 1; i < steps; i++ {
 		a := a0 + sweep*float64(i)/float64(steps)

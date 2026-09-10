@@ -109,6 +109,12 @@ func (m Matrix) ApproxScale() float32 {
 	return (sx + sy) * 0.5
 }
 
+// Finite reports whether every coefficient is a finite number.
+func (m Matrix) Finite() bool {
+	return finite32(m.A) && finite32(m.B) && finite32(m.C) &&
+		finite32(m.D) && finite32(m.E) && finite32(m.F)
+}
+
 func nearEq(a, b float32) bool {
 	d := a - b
 	if d < 0 {
