@@ -2,10 +2,10 @@ package paintengine2d
 
 // Damage records dirty rectangles for UI-style partial redraw (Evas-like).
 //
-// The paint engine is still immediate-mode: draws composite now. A forthcoming
-// retained UI framework can attach a Damage to a [Context] via
-// [Context.SetDamage], skip widgets with [Damage.Overlaps], and after a frame
-// present only [Damage.Bounds] or the coalesced [Damage.Rects].
+// The paint engine is still immediate-mode: draws composite now. A UI
+// framework or window manager attaches a Damage via [Context.SetDamage],
+// skips clean regions with [Damage.Overlaps] (widgets or decoration
+// strips), and presents [Damage.Bounds] / [Damage.Rects] to the OS.
 //
 // Rects are in device pixels. Overlapping or nearly adjacent boxes are merged
 // so the list stays small.

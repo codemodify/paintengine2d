@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.6.0 — 2026-09-10
+
+Shared engine for two future consumers: a UI framework and a WM/DE.
+Still no windowing, widgets, or compositor in this repo.
+
+### Added
+
+- `WrapImage` + `Image.Stride` / `RowStride` so a toolkit or WM can paint
+  into an existing packed or padded premul buffer (swapchain / shm / surface)
+- README layering: Engine → UI framework → apps; Engine → WM/DE → surfaces
+
 ## 0.5.0 — 2026-09-10
 
 Foundation APIs for a forthcoming desktop UI framework. Still no widgets.

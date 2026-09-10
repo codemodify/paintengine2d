@@ -32,13 +32,17 @@
 // Rasterization is delegated to a [Device]. v0 ships [CPUDevice]. A future
 // GPU device can implement the same interface without changing call sites.
 //
-// # Foundation for a UI framework
+// # Consumers (other repositories)
 //
-// This package is infrastructure, not an app toolkit. A separate Go desktop
-// UI framework will sit on top: widgets, layout, input, IME, and a11y live
-// there. [Context] / [Device] are the stable paint surface those widgets will
-// call ([Context.Save], clip, transform, images, [Context.DrawGlyphs],
-// [Damage]).
+// This module is a shared library: import github.com/codemodify/paintengine2d.
+// It has no windowing and no app main loop.
+//
+//	Engine  →  UI framework  →  apps          (widgets, layout, windows-as-app-UI)
+//	Engine  →  WM / DE       →  surfaces      (borders, titlebars, panels; X11 + Wayland)
+//
+// Both paint into caller-owned buffers via [NewImage] or [WrapImage].
+// [Context] / [Device] / [Damage] / [GlyphRun] are the stable surface.
+// X11, Wayland, and Win32 peers live in those other repos.
 //
 // # UI subset
 //

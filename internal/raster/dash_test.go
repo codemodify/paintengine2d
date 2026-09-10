@@ -29,11 +29,11 @@ func TestDashEmptyIsSolid(t *testing.T) {
 
 func TestSampleNearestInBounds(t *testing.T) {
 	pix := []byte{10, 20, 30, 40, 50, 60, 70, 80}
-	r, g, b, a := SampleNearestPremul(pix, 2, 1, 1.2, 0.1)
+	r, g, b, a := SampleNearestPremul(pix, 2, 1, 8, 1.2, 0.1)
 	if r != 50 || a != 80 {
 		t.Fatalf("nearest %d %d %d %d", r, g, b, a)
 	}
-	r, g, b, a = SampleNearestPremul(pix, 2, 1, -1, 0)
+	r, g, b, a = SampleNearestPremul(pix, 2, 1, 8, -1, 0)
 	if r|g|b|a != 0 {
 		t.Fatal("outside")
 	}

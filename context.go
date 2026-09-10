@@ -4,9 +4,10 @@ package paintengine2d
 // JUCE's Graphics. It owns a transform / clip / paint stack and forwards
 // drawing to a [Device].
 //
-// This is the stable paint surface a forthcoming desktop UI framework will
-// call from widget Paint methods. It is not a widget toolkit: no layout,
-// hit-testing tree, IME, or accessibility lives here.
+// This is the stable paint surface for two future consumers (not in this
+// repo): a desktop UI framework (widget Paint into a buffer/swapchain) and
+// a desktop environment / window manager (borders, titlebars, panels into
+// X11/Wayland surfaces). Platform windowing stays out of this package.
 //
 // A Context is not safe for concurrent use.
 type Context struct {

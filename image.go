@@ -8,9 +8,13 @@ import (
 	"os"
 )
 
-// Image is an owned pixmap in premultiplied 8-bit sRGB RGBA.
+// Image is a pixmap in premultiplied 8-bit sRGB RGBA.
 //
-// Layout: row-major, 4 bytes per pixel (R, G, B, A), stride = Width * 4.
+// Layout: row-major, 4 bytes per pixel (R, G, B, A). [Image.Stride] is the
+// byte distance between rows (default Width*4). A UI toolkit or compositor
+// can [WrapImage] an existing buffer (swapchain, X11 shm, Wayland shm)
+// without copying. This package does not talk to those platforms.
+//
 // Channels are premultiplied: a fully transparent pixel is 0,0,0,0; a 50%
 // red pixel is approximately 128,0,0,128. This is the format the CPU
 // backend blends into.
@@ -20,10 +24,12 @@ import (
 type Image struct {
 	Width  int
 	Height int
+	// Stride is bytes per row. Zero means packed (Width * 4).
+	Stride int
 	Pix    []byte
 }
 
-// NewImage allocates a transparent w×h pixmap.
+// NewImage allocates a transparent packed w×h pixmap (stride = width*4).
 func NewImage(w, h int) *Image {
 	if w < 0 {
 		w = 0
@@ -34,8 +40,45 @@ func NewImage(w, h int) *Image {
 	return &Image{
 		Width:  w,
 		Height: h,
+		Stride: w * 4,
 		Pix:    make([]byte, w*h*4),
 	}
+}
+
+// WrapImage attaches an existing premul RGBA buffer. The caller owns pix;
+// it must remain valid and unchanged in length for the Image's lifetime.
+//
+// stride is bytes per row and must be >= width*4. A stride of 0 means packed
+// (width*4). Returns nil if the buffer is too small or the size is invalid.
+//
+// Typical callers: a UI framework painting into a swapchain/shm buffer, or
+// a window manager painting decorations into an X11/Wayland surface.
+func WrapImage(pix []byte, w, h, stride int) *Image {
+	if w <= 0 || h <= 0 || pix == nil {
+		return nil
+	}
+	if stride <= 0 {
+		stride = w * 4
+	}
+	if stride < w*4 {
+		return nil
+	}
+	need := (h-1)*stride + w*4
+	if len(pix) < need {
+		return nil
+	}
+	return &Image{Width: w, Height: h, Stride: stride, Pix: pix}
+}
+
+// RowStride returns the byte stride (never 0 for a non-empty image).
+func (im *Image) RowStride() int {
+	if im == nil {
+		return 0
+	}
+	if im.Stride > 0 {
+		return im.Stride
+	}
+	return im.Width * 4
 }
 
 // NewImageFromNRGBA copies an [image.NRGBA] (or converts any image.Image)
@@ -59,7 +102,7 @@ func NewImageFromNRGBA(src image.Image) *Image {
 	return im
 }
 
-func (im *Image) pixIndex(x, y int) int { return (y*im.Width + x) * 4 }
+func (im *Image) pixIndex(x, y int) int { return y*im.RowStride() + x*4 }
 
 // ColorModel implements [image.Image].
 func (im *Image) ColorModel() color.Model { return color.NRGBAModel }
@@ -106,28 +149,43 @@ func (im *Image) SetColor(x, y int, c Color) {
 	im.Pix[i+3] = a
 }
 
-// Clear fills the entire pixmap with c (premultiplied).
+// Clear fills the entire pixmap with c (premultiplied). Padding bytes
+// beyond each row's pixels are left untouched (surface stride).
 func (im *Image) Clear(c Color) {
-	if im == nil || len(im.Pix) == 0 {
+	if im == nil || len(im.Pix) == 0 || im.Width <= 0 || im.Height <= 0 {
 		return
 	}
 	r, g, b, a := c.Premul8()
+	rowBytes := im.Width * 4
+	stride := im.RowStride()
 	pix := im.Pix
-	for i := 0; i < len(pix); i += 4 {
-		pix[i+0] = r
-		pix[i+1] = g
-		pix[i+2] = b
-		pix[i+3] = a
+	for y := 0; y < im.Height; y++ {
+		i := y * stride
+		end := i + rowBytes
+		for i < end {
+			pix[i+0] = r
+			pix[i+1] = g
+			pix[i+2] = b
+			pix[i+3] = a
+			i += 4
+		}
 	}
 }
 
-// Clone returns a deep copy of the pixmap.
+// Clone returns a packed deep copy of the pixmap.
 func (im *Image) Clone() *Image {
 	if im == nil {
 		return nil
 	}
 	out := NewImage(im.Width, im.Height)
-	copy(out.Pix, im.Pix)
+	if im.RowStride() == out.RowStride() {
+		copy(out.Pix, im.Pix)
+		return out
+	}
+	row := im.Width * 4
+	for y := 0; y < im.Height; y++ {
+		copy(out.Pix[y*row:(y+1)*row], im.Pix[y*im.RowStride():y*im.RowStride()+row])
+	}
 	return out
 }
 
