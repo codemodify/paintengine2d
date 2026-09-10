@@ -115,6 +115,20 @@ func TestCustomShaperHook(t *testing.T) {
 	}
 }
 
+func TestBitmapPunctuation(t *testing.T) {
+	atlas := NewBitmapAtlas(White)
+	for _, r := range []rune{'/', '_', '%', '(', ')', '='} {
+		if _, ok := atlas.Cell(GlyphID(r)); !ok {
+			t.Fatalf("missing %q", string(r))
+		}
+	}
+	img := NewImage(48, 16)
+	NewContext(img).DrawLabel("100%", atlas, Pt(2, 2), Paint{Color: White, Filter: FilterNearest})
+	if countOpaque(img, 200) < 10 {
+		t.Fatalf("punctuation label, n=%d", countOpaque(img, 200))
+	}
+}
+
 func TestLabelDamage(t *testing.T) {
 	img := NewImage(48, 16)
 	ctx := NewContext(img)

@@ -6,6 +6,7 @@ coverage.out
 coverage.html
 cpu.prof
 mem.prof
+testdata/fuzz/
 
 # Example render outputs (checked-in goldens live under testdata/)
 examples/**/*.png
