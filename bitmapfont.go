@@ -31,9 +31,14 @@ func NewBitmapAtlas(fg Color) *FontAtlas {
 			}
 		}
 		id := GlyphID(r)
-		cells[id] = AtlasCell{
+		cell := AtlasCell{
 			Src:     XYWH(float32(ox), float32(oy), cw, ch),
 			Advance: cw,
+		}
+		cells[id] = cell
+		// Labels often mix case; alias a–z onto the same A–Z cells.
+		if r >= 'A' && r <= 'Z' {
+			cells[GlyphID(r-'A'+'a')] = cell
 		}
 	}
 	return &FontAtlas{Image: img, Cells: cells}
