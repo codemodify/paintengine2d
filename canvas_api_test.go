@@ -157,6 +157,55 @@ func TestContextImageAndDevice(t *testing.T) {
 	}
 }
 
+func TestSetStrokeZeroWidthIsNoop(t *testing.T) {
+	img := NewImage(24, 24)
+	ctx := NewContext(img)
+	ctx.SetStroke(StrokePaint(White, 0))
+	ctx.StrokeRect(XYWH(4, 4, 16, 16))
+	if countOpaque(img, 1) != 0 {
+		t.Fatal("SetStroke(width=0) must not become a 1px hairline")
+	}
+	ctx.SetStroke(StrokePaint(White, 2))
+	ctx.StrokeRect(XYWH(4, 4, 16, 16))
+	if countOpaque(img, 200) < 8 {
+		t.Fatal("positive stroke width should paint")
+	}
+}
+
+func TestDrawArcQuarter(t *testing.T) {
+	img := NewImage(48, 48)
+	ctx := NewContext(img)
+	ctx.DrawArc(Pt(24, 24), 16, 16, 0, 1.5708, Paint{
+		Color:  White,
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 3, Cap: CapButt, Join: JoinMiter, MiterLimit: 4},
+	})
+	// 0 → +X, clockwise 90° toward +Y: coverage near (40,24) and (24,40).
+	if alphaAt(img, 40, 24) < 80 {
+		t.Fatalf("+X end of arc a=%d", alphaAt(img, 40, 24))
+	}
+	if alphaAt(img, 24, 40) < 80 {
+		t.Fatalf("+Y end of arc a=%d", alphaAt(img, 24, 40))
+	}
+	if alphaAt(img, 24, 8) > 20 {
+		t.Fatalf("should not paint the opposite semicircle, a=%d", alphaAt(img, 24, 8))
+	}
+}
+
+func TestClipPathRuleEvenOdd(t *testing.T) {
+	img := NewImage(80, 80)
+	ctx := NewContext(img)
+	ctx.ClipPathRule(pentagram(Pt(40, 40), 32), FillEvenOdd)
+	ctx.SetColor(White)
+	ctx.FillRect(XYWH(0, 0, 80, 80))
+	if alphaAt(img, 40, 40) > 40 {
+		t.Fatalf("even-odd clip should leave a hole at the star center, a=%d", alphaAt(img, 40, 40))
+	}
+	if alphaAt(img, 40, 14) < 150 {
+		t.Fatalf("star tip should be inside the clip, a=%d", alphaAt(img, 40, 14))
+	}
+}
+
 func TestNewContextDeviceNilPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
