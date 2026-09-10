@@ -30,6 +30,7 @@ func TestGoldenImages(t *testing.T) {
 		{"radial", sceneRadial, 96, 96},
 		{"dashes", sceneDashes, 200, 80},
 		{"image_filter", sceneImageFilter, 96, 48},
+		{"ui_label", sceneUILabel, 120, 48},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -260,6 +261,12 @@ func sceneImageFilter(ctx *Context) {
 	}
 	ctx.DrawImageRectPaint(src, XYWH(0, 0, 4, 4), XYWH(8, 8, 36, 32), Paint{Color: White, Filter: FilterNearest})
 	ctx.DrawImageRectPaint(src, XYWH(0, 0, 4, 4), XYWH(52, 8, 36, 32), Paint{Color: White, Filter: FilterBilinear})
+}
+
+func sceneUILabel(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRoundRect(XYWH(8, 10, 104, 28), 6, 6, Fill(RGB(0.23, 0.51, 0.93)))
+	ctx.DrawLabel("SAVE", NewBitmapAtlas(White), Pt(34, 16), Paint{Color: White, Filter: FilterNearest})
 }
 
 func sceneBlit(ctx *Context) {
