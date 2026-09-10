@@ -32,6 +32,17 @@ func TestNearest1to1IsExact(t *testing.T) {
 	}
 }
 
+func TestNearest1to1WithClipMatches(t *testing.T) {
+	src := NewImage(8, 8)
+	src.Clear(RGB(0.2, 0.7, 0.3))
+	dst := NewImage(20, 20)
+	ctx := NewContext(dst)
+	ctx.ClipRect(XYWH(4, 4, 6, 6))
+	ctx.DrawImageRectPaint(src, XYWH(0, 0, 8, 8), XYWH(2, 2, 8, 8), Paint{Color: White, Filter: FilterNearest})
+	assertAlpha(t, dst, 5, 5, 250, 255, "inside clip")
+	assertAlpha(t, dst, 2, 2, 0, 0, "outside clip")
+}
+
 func TestNearest1to1FromPaddedSource(t *testing.T) {
 	const w, h, pad = 5, 4, 10
 	stride := w*4 + pad

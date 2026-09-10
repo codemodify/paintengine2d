@@ -144,12 +144,6 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 		return
 	}
 
-	inv, ok := xform.Invert()
-	if !ok {
-		return
-	}
-	sx := srcRect.Dx() / dstRect.Dx()
-	sy := srcRect.Dy() / dstRect.Dy()
 	modA := paint.Color.A
 	if paint.Shader == nil && (paint.Color == (Color{}) || modA == 0) {
 		// Zero-value paint means "unmodulated blit".
@@ -159,6 +153,18 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 		return
 	}
 	mod := uint8(clamp32(modA, 0, 1)*255 + 0.5)
+
+	// UI labels / icons: integer 1:1 nearest under a pure translation.
+	if d.blitNearest1to1(src, srcRect, dstRect, xform, paint, clip, x0, y0, x1, y1, mod) {
+		return
+	}
+
+	inv, ok := xform.Invert()
+	if !ok {
+		return
+	}
+	sx := srcRect.Dx() / dstRect.Dx()
+	sy := srcRect.Dy() / dstRect.Dy()
 
 	for y := y0; y < y1; y++ {
 		for x := x0; x < x1; x++ {
@@ -192,6 +198,80 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 			raster.BlendSrcOver(d.img.Pix, i, sr, sg, sb, sa, cover)
 		}
 	}
+}
+
+// blitNearest1to1 copies integer-aligned 1:1 nearest samples without a
+// per-pixel matrix invert. Used for bitmap labels and UI icons.
+func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip, x0, y0, x1, y1 int, mod uint8) bool {
+	if paint.Filter != FilterNearest || !xform.IsTranslation() {
+		return false
+	}
+	if abs32(srcRect.Dx()-dstRect.Dx()) > 1e-4 || abs32(srcRect.Dy()-dstRect.Dy()) > 1e-4 {
+		return false
+	}
+	dx0, okX := nearInt(dstRect.Min.X + xform.E)
+	dy0, okY := nearInt(dstRect.Min.Y + xform.F)
+	sx0, okSX := nearInt(srcRect.Min.X)
+	sy0, okSY := nearInt(srcRect.Min.Y)
+	if !okX || !okY || !okSX || !okSY {
+		return false
+	}
+	sw, sh := src.Width, src.Height
+	sxMax := sx0 + int(srcRect.Dx()+0.5)
+	syMax := sy0 + int(srcRect.Dy()+0.5)
+	if sxMax > sw {
+		sxMax = sw
+	}
+	if syMax > sh {
+		syMax = sh
+	}
+	sstride := src.RowStride()
+	spix := src.Pix
+	dpix := d.img.Pix
+	for y := y0; y < y1; y++ {
+		sy := sy0 + (y - dy0)
+		if sy < sy0 || sy >= syMax {
+			continue
+		}
+		srow := sy * sstride
+		di := d.img.pixIndex(x0, y)
+		for x := x0; x < x1; x++ {
+			m := clip.maskAt(x, y)
+			if m == 0 {
+				di += 4
+				continue
+			}
+			sx := sx0 + (x - dx0)
+			if sx < sx0 || sx >= sxMax {
+				di += 4
+				continue
+			}
+			si := srow + sx*4
+			sr, sg, sb, sa := spix[si+0], spix[si+1], spix[si+2], spix[si+3]
+			if sa == 0 {
+				di += 4
+				continue
+			}
+			cover := m
+			if mod != 255 {
+				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
+			}
+			raster.BlendSrcOver(dpix, di, sr, sg, sb, sa, cover)
+			di += 4
+		}
+	}
+	return true
+}
+
+func nearInt(v float32) (int, bool) {
+	i := int(v)
+	if v < 0 && float32(i) != v {
+		i--
+	}
+	if abs32(v-float32(i)) > 1e-4 {
+		return 0, false
+	}
+	return i, true
 }
 
 func (d *CPUDevice) packPath(path *Path) {
