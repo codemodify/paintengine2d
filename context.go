@@ -4,6 +4,10 @@ package paintengine2d
 // JUCE's Graphics. It owns a transform / clip / paint stack and forwards
 // drawing to a [Device].
 //
+// This is the stable paint surface a forthcoming desktop UI framework will
+// call from widget Paint methods. It is not a widget toolkit: no layout,
+// hit-testing tree, IME, or accessibility lives here.
+//
 // A Context is not safe for concurrent use.
 type Context struct {
 	dev     Device
@@ -70,6 +74,51 @@ func (c *Context) Restore() {
 	}
 	c.cur = c.stack[n-1]
 	c.stack = c.stack[:n-1]
+}
+
+// SaveCount is the number of unmatched [Save] calls (0 at the root).
+func (c *Context) SaveCount() int { return len(c.stack) }
+
+// Size is the device pixmap size in pixels.
+func (c *Context) Size() (w, h int) { return c.dev.Size() }
+
+// DeviceClipBounds is the current clip as a device-space AABB (canvas ∩ scissor).
+// A path mask may be tighter; this box is conservative and allocation-free.
+func (c *Context) DeviceClipBounds() Rect {
+	w, h := c.dev.Size()
+	canvas := XYWH(0, 0, float32(w), float32(h))
+	if c.cur.clip.hasScissor {
+		return canvas.Intersect(c.cur.clip.scissor)
+	}
+	return canvas
+}
+
+// LocalClipBounds maps [Context.DeviceClipBounds] into user space.
+// Returns empty if the current matrix is not invertible.
+func (c *Context) LocalClipBounds() Rect {
+	dev := c.DeviceClipBounds()
+	if dev.Empty() {
+		return Rect{}
+	}
+	inv, ok := c.cur.xform.Invert()
+	if !ok {
+		return Rect{}
+	}
+	return inv.TransformRect(dev)
+}
+
+// QuickReject reports whether r (user space) lies fully outside the current
+// clip. A retained UI layer can skip painting a child whose bounds reject.
+// The test uses the scissor AABB (conservative if a path mask is active).
+func (c *Context) QuickReject(r Rect) bool {
+	if r.Empty() || !r.Finite() || !c.cur.xform.Finite() {
+		return true
+	}
+	dev := c.cur.xform.TransformRect(r)
+	if !dev.Finite() {
+		return true
+	}
+	return !dev.Overlaps(c.DeviceClipBounds())
 }
 
 func (s ctxState) clone() ctxState {
