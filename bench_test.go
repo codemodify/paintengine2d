@@ -109,6 +109,21 @@ func BenchmarkStrokeRoundRectUI(b *testing.B) {
 	}
 }
 
+func BenchmarkImageBlitNearestUI(b *testing.B) {
+	src := NewImage(32, 32)
+	src.Clear(RGB(0.4, 0.5, 0.8))
+	dst := NewImage(64, 64)
+	ctx := NewContext(dst)
+	sr := XYWH(0, 0, 32, 32)
+	dr := XYWH(8, 8, 32, 32)
+	p := Paint{Color: White, Filter: FilterNearest}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawImageRectPaint(src, sr, dr, p)
+	}
+}
+
 func BenchmarkDrawLabel(b *testing.B) {
 	img := NewImage(80, 20)
 	ctx := NewContext(img)
