@@ -65,9 +65,10 @@ type Rasterizer struct {
 	cover  []uint16
 }
 
-// ResetEdges replaces the active edge list.
+// ResetEdges replaces the active edge list. The slice is borrowed until the
+// next ResetEdges; CoverageRow only reads it.
 func (r *Rasterizer) ResetEdges(edges []Edge) {
-	r.edges = append(r.edges[:0], edges...)
+	r.edges = edges
 }
 
 // CoverageRow rasterizes one pixel row y into cover[0:width] as 0..255

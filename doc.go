@@ -47,7 +47,7 @@
 //
 // # UI subset
 //
-// v0.7 is UI-foundation ready: paths, AA fill/stroke, linear (and radial)
+// v0.7.1 is UI-foundation ready: paths, AA fill/stroke, linear (and radial)
 // gradients, clip rect/path, images, WrapImage stride, dirty-rect recording,
 // and text hooks ([FontAtlas] + [GlyphRun] + [Shaper] + [Context.DrawGlyphs],
 // with [NullShaper] for bitmap labels). IME, OpenType, and a11y belong in a
@@ -66,7 +66,8 @@
 // # Performance contracts
 //
 // Opaque integer-aligned [Context.FillRect] is allocation-free.
-// Repeated strokes reuse flatten/outline scratch on [CPUDevice].
+// Integer 1:1 nearest blit is allocation-free.
+// Warm path fill and stroke reuse flatten / stroke-pool scratch (0 allocs).
 // [Context.ClipPath] rasterizes only the path's device-space bounds.
 // Non-finite coordinates and matrices are ignored (no panic).
 package paintengine2d

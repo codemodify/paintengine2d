@@ -192,6 +192,32 @@ func FuzzDamage(f *testing.F) {
 	})
 }
 
+func FuzzClipTransform(f *testing.F) {
+	f.Add(int8(8), int8(8), int8(20), int8(16), uint8(3), int8(2))
+	f.Fuzz(func(t *testing.T, x, y, w, h int8, flags uint8, rot int8) {
+		img := NewImage(32, 32)
+		ctx := NewContext(img)
+		ctx.Translate(16, 16)
+		ctx.Rotate(float32(rot) * 0.05)
+		if flags&1 == 1 {
+			ctx.Scale(1.25, 0.8)
+		}
+		if flags&2 == 2 {
+			ctx.ClipRoundRect(XYWH(float32(x), float32(y), float32(8+w%20), float32(8+h%20)), 3, 3)
+		} else {
+			ctx.ClipRect(XYWH(float32(x), float32(y), float32(8+w%20), float32(8+h%20)))
+		}
+		_ = ctx.ClipEmpty()
+		_ = ctx.QuickReject(XYWH(-4, -4, 8, 8))
+		ctx.DrawRect(XYWH(-12, -12, 24, 24), Fill(White))
+		ctx.DrawCircle(Pt(0, 0), 6, StrokePaint(RGB(0.2, 0.6, 1), 1.5))
+		if ctx.ClipEmpty() {
+			return
+		}
+		ctx.DrawLabel("x", NewBitmapAtlas(White), Pt(-6, -4), Paint{Color: White, Filter: FilterNearest})
+	})
+}
+
 func FuzzTextHooks(f *testing.F) {
 	f.Add("SAVE", int8(2), int8(2), uint8(1))
 	f.Add("Ok!", int8(-4), int8(3), uint8(0))

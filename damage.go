@@ -52,6 +52,14 @@ func (d *Damage) Empty() bool {
 	return d == nil || len(d.Rects) == 0
 }
 
+// Count is the number of coalesced dirty boxes.
+func (d *Damage) Count() int {
+	if d == nil {
+		return 0
+	}
+	return len(d.Rects)
+}
+
 // Bounds returns the union of recorded rectangles, or an empty rect.
 func (d *Damage) Bounds() Rect {
 	if d == nil || len(d.Rects) == 0 {

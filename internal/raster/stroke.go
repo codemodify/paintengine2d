@@ -27,9 +27,33 @@ type seg struct {
 	a, b, dir, nor Vec2
 }
 
+// StrokePool reuses stroke-expansion scratch across calls. A zero value is
+// ready. The slices returned by [StrokePool.Expand] stay valid until the
+// next Expand on the same pool.
+type StrokePool struct {
+	out     [][]Vec2
+	store   [][]Vec2
+	pts     []Vec2
+	segs    []seg
+	left    []Vec2
+	right   []Vec2
+	outline []Vec2
+}
+
 // ExpandStroke offsets flattened contours by Width/2 and returns closed
 // outline contours suitable for non-zero fill.
 func ExpandStroke(contours [][]Vec2, closed []bool, opt StrokeOpts) [][]Vec2 {
+	var p StrokePool
+	return p.Expand(contours, closed, opt)
+}
+
+// Expand is [ExpandStroke] using pooled scratch. Warm calls allocate only
+// when a contour grows past the retained capacity.
+func (p *StrokePool) Expand(contours [][]Vec2, closed []bool, opt StrokeOpts) [][]Vec2 {
+	if p == nil {
+		var tmp StrokePool
+		return tmp.Expand(contours, closed, opt)
+	}
 	if opt.Width <= 0 {
 		return nil
 	}
@@ -37,28 +61,57 @@ func ExpandStroke(contours [][]Vec2, closed []bool, opt StrokeOpts) [][]Vec2 {
 		opt.MiterLimit = 4
 	}
 	half := opt.Width * 0.5
-	out := make([][]Vec2, 0, len(contours))
+	out := p.out[:0]
+	storeI := 0
 	for i, c := range contours {
 		if len(c) < 2 {
 			continue
 		}
 		isClosed := i < len(closed) && closed[i]
-		pts := dedupeContour(c, isClosed)
+		pts := dedupeContourInto(p.pts, c, isClosed)
+		p.pts = pts
 		if len(pts) < 2 {
 			continue
 		}
 		if isClosed && len(pts) < 3 {
 			isClosed = false
 		}
-		if outline := strokeContour(pts, isClosed, half, opt); len(outline) >= 3 {
-			out = append(out, outline)
+		outline := p.strokeContour(pts, isClosed, half, opt)
+		if len(outline) < 3 {
+			continue
 		}
+		snap := p.snapshotOutline(storeI, outline)
+		out = append(out, snap)
+		storeI++
 	}
+	p.out = out
 	return out
 }
 
+func (p *StrokePool) snapshotOutline(i int, outline []Vec2) []Vec2 {
+	if i < len(p.store) {
+		snap := p.store[i]
+		if cap(snap) < len(outline) {
+			snap = make([]Vec2, len(outline))
+		} else {
+			snap = snap[:len(outline)]
+		}
+		copy(snap, outline)
+		p.store[i] = snap
+		return snap
+	}
+	snap := make([]Vec2, len(outline))
+	copy(snap, outline)
+	p.store = append(p.store, snap)
+	return snap
+}
+
 func dedupeContour(c []Vec2, closed bool) []Vec2 {
-	pts := make([]Vec2, 0, len(c))
+	return dedupeContourInto(make([]Vec2, 0, len(c)), c, closed)
+}
+
+func dedupeContourInto(dst []Vec2, c []Vec2, closed bool) []Vec2 {
+	pts := dst[:0]
 	for _, p := range c {
 		if len(pts) > 0 && p.near(pts[len(pts)-1], 1e-5) {
 			continue
@@ -71,9 +124,9 @@ func dedupeContour(c []Vec2, closed bool) []Vec2 {
 	return pts
 }
 
-func strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2 {
+func (p *StrokePool) strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2 {
 	n := len(pts)
-	segs := make([]seg, 0, n)
+	segs := p.segs[:0]
 	lim := n - 1
 	if closed {
 		lim = n
@@ -88,13 +141,14 @@ func strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2
 		dir := d.norm()
 		segs = append(segs, seg{a: a, b: b, dir: dir, nor: dir.perp()})
 	}
+	p.segs = segs
 	if len(segs) == 0 {
 		return nil
 	}
 
 	// Left side travels a→b; right side travels b→a.
-	left := make([]Vec2, 0, len(segs)*4)
-	right := make([]Vec2, 0, len(segs)*4)
+	left := p.left[:0]
+	right := p.right[:0]
 
 	emitJoin := func(dst *[]Vec2, p, nIn, nOut, dIn, dOut Vec2, leftSide bool) {
 		inOff := p.add(nIn.mul(half))
@@ -157,7 +211,10 @@ func strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2
 			}
 		}
 
-		outline := make([]Vec2, 0, len(left)+len(right)+16)
+		outline := p.outline[:0]
+		if cap(outline) < len(left)+len(right)+16 {
+			outline = make([]Vec2, 0, len(left)+len(right)+16)
+		}
 		// Start cap from right[0] to left[0].
 		outline = appendCap(outline, segs[0].a, right[0], left[0], segs[0].dir.mul(-1), half, opt.Cap)
 		outline = append(outline, left...)
@@ -166,6 +223,7 @@ func strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2
 		for i := len(right) - 1; i >= 0; i-- {
 			outline = append(outline, right[i])
 		}
+		p.left, p.right, p.outline = left, right, outline
 		return outline
 	}
 
@@ -181,7 +239,10 @@ func strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2
 		emitJoin(&left, s.b, s.nor, n.nor, s.dir, n.dir, true)
 		emitJoin(&right, s.b, s.nor.mul(-1), n.nor.mul(-1), s.dir, n.dir, false)
 	}
-	outline := make([]Vec2, 0, len(left)+len(right)+1)
+	outline := p.outline[:0]
+	if cap(outline) < len(left)+len(right)+1 {
+		outline = make([]Vec2, 0, len(left)+len(right)+1)
+	}
 	outline = append(outline, left...)
 	for i := len(right) - 1; i >= 0; i-- {
 		outline = append(outline, right[i])
@@ -189,6 +250,7 @@ func strokeContour(pts []Vec2, closed bool, half float32, opt StrokeOpts) []Vec2
 	if len(outline) > 0 {
 		outline = append(outline, outline[0])
 	}
+	p.left, p.right, p.outline = left, right, outline
 	return outline
 }
 
