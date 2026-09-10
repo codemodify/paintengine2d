@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.7.0 — 2026-09-10
+
+**UI-foundation ready.** The CPU paint core is complete enough to start a
+separate desktop UI framework (and a WM/DE) on top. This repo stays
+pixels-only: no widgets, no windowing.
+
+### Added
+
+- `Context.DrawArc`, `Context.StrokeRect`, `Context.ClipPathRule`
+- `GlyphRun.Bounds` for label hit-testing and dirty inflation
+- Bitmap atlas lowercase aliases and `/ _ % ( ) =` punctuation
+- Integer 1:1 nearest blit fast path (labels / icons)
+- Goldens: `arc_stroke`, `evenodd_clip`, `ui_button`, `dash_offset`,
+  `rotated_blit`, `radial_tiles` (28 scenes)
+- Fuzz: `FuzzWrapImage`, `FuzzDamage`, `FuzzTextHooks`
+
+### Fixed
+
+- `Damage` merges overlapping boxes before `MaxRects` collapse
+- `SetStroke(width <= 0)` is a no-op (no silent 1px hairline)
+- Draw damage is clipped to scissor ∩ canvas
+
+### Docs
+
+- API stability contract for a UI kit
+- UI-foundation checklist in the README
+
 ## 0.6.0 — 2026-09-10
 
 Shared engine for two future consumers: a UI framework and a WM/DE.
