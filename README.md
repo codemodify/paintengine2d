@@ -185,6 +185,13 @@ Goldens compare premul RGBA with a small per-channel tolerance. Quality tests
 also assert geometry without files: circle interiors are solid, exteriors are
 transparent, and the rim contains fractional coverage.
 
+The suite also covers (inspired by public AGG / Blend2D / Skia / JUCE /
+LibGfx test *themes*, not their source): save/restore stacks, clip
+intersection, transform order, even-odd vs non-zero, stroke cap/join/miter
+limit, gradient clamp/repeat/mirror, src-over alpha, DrawImage modulation,
+empty/degenerate paths, zero-size rects, empty clip, out-of-bounds and large
+coordinates, and subpixel positions.
+
 Representative numbers on this repo's CI-like host (Go 1.22, linux/amd64,
 512×512 target, `benchtime=400ms`). Treat them as a baseline, not a promise:
 
@@ -209,20 +216,45 @@ paintengine2d/           public API (module github.com/codemodify/paintengine2d)
   path.go geom.go …      geometry, paint, image, clip
   internal/raster/       flatten, scanline AA, stroke expand, blend
   examples/hello|gallery|paths
-  testdata/golden/       regression PNGs
+  testdata/golden/       regression PNGs (14 scenes)
 ```
 
 ## Positioning
 
-| This library | Not this library |
-| --- | --- |
-| Immediate-mode CPU canvas | Widget toolkit, layout, input |
-| Own rasterizer | `skia-bindings`, Cairo, Blend2D, NanoVG |
-| Pure Go, no CGO | Gio (UI + ops + different stack) |
-| Fill / stroke first | Text, SVG, PDF, GPU (yet) |
+**paintengine2d** is an immediate-mode CPU canvas with its own rasterizer.
+It is not a widget toolkit, not a Skia/Cairo binding, and not a GPU UI stack.
+
+Where we win today: **pure Go**, **no CGO in the paint core**, **own engine**
+(you can read and change every scanline). Where we are early: **no GPU
+backend yet**, **no text/OpenType**, no dashes/radials, no retained scene.
 
 `Damage` exists as a named stub for a future retained / dirty-rect layer.
 It does not change what `Context` draws today.
+
+### Compared with alternatives
+
+Honest snapshot of what people usually reach for. Licenses are typical
+upstream terms — check the project you actually vendor. “GPU” means a
+shipping hardware backend, not a future hook.
+
+| | Language | CGO / native deps | Engine | GPU | UI toolkit | License (typical) | Best for |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **paintengine2d** | Go 1.22+ | **None** | **Own** CPU scanline AA | Hook only (`Device`) | No | MIT | Embedding a small, readable Go canvas; tools, tests, offline render |
+| [Gio](https://gioui.org) | Go | Optional (platform windowing) | Own ops + GPU/CPU renderer | Yes | Yes (widgets, layout, input) | MIT / Unlicense | Full native Go GUIs; not a drop-in paint library |
+| [Fyne](https://fyne.io) | Go | OpenGL / platform via fyne | Own + GL | Yes (via GL) | Yes | BSD-3-Clause | Cross-platform Go apps with batteries-included widgets |
+| Skia bindings | Go/C++ | **Yes** (Skia + toolchain) | Binding | Yes | No (canvas only) | Skia BSD-3 | Production 2D when you want Skia’s completeness and accept CGO |
+| Cairo bindings | Go/C | **Yes** (libcairo) | Binding | Optional | No | LGPL / MPL | Existing Cairo pipelines; print/PDF-heavy apps |
+| NanoVG | C (+ Go ports) | Usually yes if wrapping C | Own (GL tessellation) | Yes | No | zlib | Immediate GL vector UI chrome |
+| Blend2D | C++ | **Yes** if bound from Go | Own (CPU, JIT) | No (CPU-first) | No | zlib | High-performance software 2D in C++ |
+| AGG | C++ | **Yes** if bound from Go | Own (classic scanline) | No | No | BSD-style / custom | Studying / porting scanline AA; not a Go module |
+| Dear ImGui | C++ | **Yes** if bound from Go | Tessellates to triangles | Via caller | Yes (immediate UI) | MIT | Debug/tools UIs — **not** a general paint/raster engine |
+| HTML Canvas / webview | JS + browser | Browser or webview binary | Browser (Skia/etc.) | Yes | HTML/CSS | n/a (host) | When you already ship a web surface |
+
+**Reading the table:** Gio and Fyne are the right answer if you need windows,
+input, and widgets. Skia/Cairo/Blend2D/NanoVG are the right answer if you
+need their maturity or GPU path and can take a native dependency.
+paintengine2d is the right answer if you want a **Go-native paint core** you
+can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 ## License
 

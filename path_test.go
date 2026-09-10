@@ -48,6 +48,14 @@ func TestPathHelpers(t *testing.T) {
 	}
 }
 
+func TestPathCloseWithoutContour(t *testing.T) {
+	p := NewPath()
+	p.Close()
+	if !p.Empty() {
+		t.Fatal("close on empty")
+	}
+}
+
 func TestLineToWithoutMove(t *testing.T) {
 	p := NewPath()
 	p.LineTo(3, 4)

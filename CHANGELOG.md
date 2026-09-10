@@ -23,7 +23,11 @@ raster engine (no CGO, no Skia/Cairo/Blend2D/AGG/Gio/NanoVG).
   horizontal coverage) into an owned premultiplied RGBA pixmap
 - PNG encode/decode via the Go standard library
 - Unit tests, golden PNG tests (`UPDATE_GOLDENS=1`), and benchmarks
+- Canvas contract tests (save/restore, clip stack, fill rules, stroke
+  caps/joins, gradient tile modes, compositing, empty/degenerate geometry)
 - Examples: `examples/hello`, `examples/gallery`, `examples/paths`
+- README comparison table vs Gio, Fyne, Skia/Cairo bindings, NanoVG, Blend2D,
+  AGG, Dear ImGui, and HTML Canvas
 
 ### Planned (not in 0.1.0)
 

@@ -22,6 +22,11 @@ func TestGoldenImages(t *testing.T) {
 		{"clip_and_xform", sceneClipXform, 140, 140},
 		{"evenodd_star", sceneStar, 100, 100},
 		{"image_blit", sceneBlit, 80, 80},
+		{"gradient_tiles", sceneGradientTiles, 160, 72},
+		{"winding_pair", sceneWindingPair, 140, 70},
+		{"clip_stack", sceneClipStack, 100, 100},
+		{"alpha_over", sceneAlphaOver, 80, 48},
+		{"thin_stroke", sceneThinStroke, 120, 40},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -147,6 +152,62 @@ func sceneStar(ctx *Context) {
 	ctx.DrawPath(pentagram(Pt(50, 50), 42), Paint{
 		Color:    RGB(1, 0.82, 0.25),
 		FillRule: FillEvenOdd,
+	})
+}
+
+func sceneGradientTiles(ctx *Context) {
+	ctx.Clear(Gray(0.1))
+	stops := []GradientStop{
+		{Offset: 0, Color: RGB(0.9, 0.2, 0.2)},
+		{Offset: 1, Color: RGB(0.15, 0.35, 0.95)},
+	}
+	for i, tile := range []TileMode{TileClamp, TileRepeat, TileMirror} {
+		y := float32(6 + i*22)
+		ctx.DrawRect(XYWH(8, y, 144, 18), Linear(LinearGradient{
+			Start: Pt(8, y),
+			End:   Pt(48, y),
+			Stops: stops,
+			Tile:  tile,
+		}))
+	}
+}
+
+func sceneWindingPair(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.09, 0.11))
+	p := overlappingCircles(Pt(34, 35), Pt(54, 35), 22, 22)
+	ctx.DrawPath(p, Paint{Color: RGB(0.95, 0.75, 0.2), FillRule: FillNonZero})
+	ctx.Translate(70, 0)
+	ctx.DrawPath(p, Paint{Color: RGB(0.3, 0.75, 0.95), FillRule: FillEvenOdd})
+}
+
+func sceneClipStack(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.08, 0.1))
+	ctx.ClipRect(XYWH(10, 10, 80, 80))
+	ctx.ClipPath(CirclePath(Pt(50, 50), 38))
+	ctx.DrawRect(XYWH(0, 0, 100, 100), Fill(RGB(0.9, 0.35, 0.4)))
+	ctx.DrawRect(XYWH(50, 0, 50, 100), Fill(RGBA(0.2, 0.45, 0.95, 0.7)))
+}
+
+func sceneAlphaOver(ctx *Context) {
+	ctx.Clear(RGB(0.12, 0.12, 0.14))
+	ctx.DrawRect(XYWH(8, 8, 40, 32), Fill(RGBA(0.95, 0.25, 0.2, 0.55)))
+	ctx.DrawRect(XYWH(28, 8, 40, 32), Fill(RGBA(0.2, 0.45, 0.95, 0.55)))
+}
+
+func sceneThinStroke(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.08, 0.1))
+	ctx.DrawLine(Pt(8, 12), Pt(112, 12), Paint{
+		Color:  RGB(0.95, 0.85, 0.4),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 0.6, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+	p := NewPath()
+	p.MoveTo(10, 28)
+	p.CubicTo(40, 8, 80, 48, 110, 28)
+	ctx.DrawPath(p, Paint{
+		Color:  RGB(0.4, 0.85, 1),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 1.25, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
 	})
 }
 
