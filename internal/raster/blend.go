@@ -31,10 +31,14 @@ func mul255(a, b uint8) uint8 {
 }
 
 // SampleBilinearPremul samples a premul RGBA buffer with bilinear filtering.
-// Pixels outside [0,w)×[0,h) are treated as transparent.
-func SampleBilinearPremul(pix []byte, w, h int, x, y float32) (r, g, b, a uint8) {
+// Pixels outside [0,w)×[0,h) are treated as transparent. stride is bytes/row
+// (0 or < w*4 means packed).
+func SampleBilinearPremul(pix []byte, w, h, stride int, x, y float32) (r, g, b, a uint8) {
 	if w <= 0 || h <= 0 {
 		return
+	}
+	if stride < w*4 {
+		stride = w * 4
 	}
 	x0 := int(mathFloor32(x))
 	y0 := int(mathFloor32(y))
@@ -65,7 +69,7 @@ func SampleBilinearPremul(pix []byte, w, h int, x, y float32) (r, g, b, a uint8)
 			if wt == 0 {
 				continue
 			}
-			pr, pg, pb, pa := pixelAt(pix, w, h, xx, yy)
+			pr, pg, pb, pa := pixelAt(pix, w, h, stride, xx, yy)
 			sr += float32(pr) * wt
 			sg += float32(pg) * wt
 			sb += float32(pb) * wt
@@ -77,18 +81,21 @@ func SampleBilinearPremul(pix []byte, w, h int, x, y float32) (r, g, b, a uint8)
 
 // SampleNearestPremul returns the premul pixel covering (x, y) in pixel
 // space (pixel i covers [i, i+1)). Outside is transparent.
-func SampleNearestPremul(pix []byte, w, h int, x, y float32) (r, g, b, a uint8) {
+func SampleNearestPremul(pix []byte, w, h, stride int, x, y float32) (r, g, b, a uint8) {
 	if w <= 0 || h <= 0 {
 		return
 	}
-	return pixelAt(pix, w, h, mathFloor32(x), mathFloor32(y))
+	if stride < w*4 {
+		stride = w * 4
+	}
+	return pixelAt(pix, w, h, stride, mathFloor32(x), mathFloor32(y))
 }
 
-func pixelAt(pix []byte, w, h, x, y int) (r, g, b, a uint8) {
+func pixelAt(pix []byte, w, h, stride, x, y int) (r, g, b, a uint8) {
 	if x < 0 || y < 0 || x >= w || y >= h {
 		return
 	}
-	i := (y*w + x) * 4
+	i := y*stride + x*4
 	return pix[i+0], pix[i+1], pix[i+2], pix[i+3]
 }
 

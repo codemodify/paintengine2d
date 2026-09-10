@@ -177,9 +177,9 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 			}
 			var sr, sg, sb, sa uint8
 			if paint.Filter == FilterNearest {
-				sr, sg, sb, sa = raster.SampleNearestPremul(src.Pix, src.Width, src.Height, tx, ty)
+				sr, sg, sb, sa = raster.SampleNearestPremul(src.Pix, src.Width, src.Height, src.RowStride(), tx, ty)
 			} else {
-				sr, sg, sb, sa = raster.SampleBilinearPremul(src.Pix, src.Width, src.Height, tx-0.5, ty-0.5)
+				sr, sg, sb, sa = raster.SampleBilinearPremul(src.Pix, src.Width, src.Height, src.RowStride(), tx-0.5, ty-0.5)
 			}
 			if sa == 0 {
 				continue

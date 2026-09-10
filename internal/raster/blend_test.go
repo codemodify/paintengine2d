@@ -19,11 +19,11 @@ func TestSampleBilinearCenterAndOutside(t *testing.T) {
 		255, 0, 0, 255, 0, 255, 0, 255,
 		0, 0, 255, 255, 255, 255, 255, 255,
 	}
-	r, g, b, a := SampleBilinearPremul(pix, 2, 2, 0, 0)
+	r, g, b, a := SampleBilinearPremul(pix, 2, 2, 8, 0, 0)
 	if r < 200 || a < 200 || g != 0 {
 		t.Fatalf("at (0,0) %d %d %d %d", r, g, b, a)
 	}
-	r, g, b, a = SampleBilinearPremul(pix, 2, 2, -2, -2)
+	r, g, b, a = SampleBilinearPremul(pix, 2, 2, 8, -2, -2)
 	if r|g|b|a != 0 {
 		t.Fatalf("outside should be transparent %d %d %d %d", r, g, b, a)
 	}
