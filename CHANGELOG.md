@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.5.0 — 2026-09-10
+
+Foundation APIs for a forthcoming desktop UI framework. Still no widgets.
+
+### Added
+
+- `Context.Size`, `SaveCount`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`
+- `Damage.Overlaps` so a retained layer can skip clean widgets
+- README / godoc: this is the paint engine for that framework, not a toolkit
+
 ## 0.4.0 — 2026-09-10
 
 UI-engine quality bar: correctness, AA, alloc tightness, denser regression.

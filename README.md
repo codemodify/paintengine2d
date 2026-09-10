@@ -1,11 +1,13 @@
 # paintengine2d
 
-The **pure-Go UI paint engine**: a from-scratch CPU canvas for widgets,
-panels, icons, and labels. Best-in-class for *Go UI painting* — not a
-Skia clone, not a widget toolkit, no CGO.
+**Paint engine for a forthcoming UI framework.** A from-scratch, pure-Go
+CPU canvas — infrastructure, not an app toolkit. A separate desktop UI
+framework will own widgets, layout, input, IME, and a11y; this repo is
+the paint layer those widgets will call.
 
-Anti-aliased fill/stroke, clip, gradients, image blit, dirty-rects, and
-text hooks. Frameworks sit on top.
+Best-in-class for *Go UI painting* inside a UI subset (not Skia feature
+parity). No CGO. Anti-aliased fill/stroke, clip, gradients, image blit,
+dirty-rects, and text hooks.
 
 ```go
 img := paintengine2d.NewImage(640, 360)
@@ -16,11 +18,11 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.4.0
+go get github.com/codemodify/paintengine2d@v0.5.0
 ```
 
 **Not** a widget toolkit (no layout, input, IME, or a11y). **Not** Gio.
-**Not** a Skia / Cairo binding. Frameworks sit *on top* of this canvas.
+**Not** a Skia / Cairo binding. The forthcoming UI framework sits *on top*.
 
 | | |
 | --- | --- |
@@ -32,10 +34,10 @@ go get github.com/codemodify/paintengine2d@v0.4.0
 ## Motivation
 
 Go's standard library can encode images, but it does not ship a paint engine.
-If you want a **default-choice Go canvas** for UI chrome — without linking
-Skia/Cairo or taking Gio's whole toolkit — this is that layer: rects, curves,
-clips, images, dirty-rects, and a text *hook* (glyph atlas blit). A GPU
-`Device` can be added later without changing call sites.
+This is the default-choice **Go paint core** for a retained desktop UI:
+rects, curves, clips, images, dirty-rects, and a text *hook* (glyph atlas
+blit). Widget trees, event routing, and IME are out of this repository.
+A GPU `Device` can be added later without changing widget `Paint` call sites.
 
 Inspiration (algorithms and API shape only — no vendored code):
 
@@ -64,7 +66,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.4.0 | Notes |
+| Feature | v0.5.0 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / circle / curves | **done** | UI primitives |
 | Affine transforms + save/restore | **done** | |
@@ -75,7 +77,8 @@ go run ./examples/paths  -o paths.png
 | Dashes | extra | present; not required for UI bar |
 | Clip rect + clip path | **done** | intersect |
 | Image blit nearest + bilinear | **done** | |
-| Dirty-rect `Damage` | **done** | coalesce + `Context.SetDamage` |
+| Dirty-rect `Damage` | **done** | coalesce, `Overlaps`, `Context.SetDamage` |
+| Clip queries / `QuickReject` | **done** | framework skip-paint |
 | Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 bitmap atlas; no OpenType |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
@@ -87,11 +90,44 @@ go run ./examples/paths  -o paths.png
 only — no Context/Device break. IME, bidi, line-break, and a11y are
 framework concerns.
 
+## Forthcoming UI framework
+
+A **separate** Go desktop UI framework will be built on this engine.
+paintengine2d stays the paint infrastructure. That framework will own:
+
+- widget tree, layout, windowing
+- input, focus, IME, accessibility
+- present of [Damage] rects to the OS
+
+Typical retained-UI paint (no widgets in this repo):
+
+```go
+dirty.Reset()
+// framework: invalidate widgets → dirty.Add(deviceRect)
+ctx.SetDamage(&dirty)
+for _, w := range widgets {
+    if !dirty.Overlaps(w.DeviceBounds) || ctx.QuickReject(w.LocalBounds) {
+        continue
+    }
+    ctx.Save()
+    ctx.Translate(w.X, w.Y)
+    ctx.ClipRect(w.LocalBounds)
+    w.Paint(ctx) // fill/stroke/blit/glyphs only
+    ctx.Restore()
+}
+// framework: present dirty.Rects (or dirty.Bounds)
+```
+
+Stable on purpose: [Context], [Device], pixel format (`premul RGBA8888`,
+`stride = width * 4`), [Damage], and [GlyphRun] / [Shaper]. Do not expect
+SaveLayer, PDF, or a widget kit from this module.
+
 ## Architecture
 
 ```mermaid
 flowchart TB
-    App["Application / examples"] --> Ctx["Context  (SkCanvas / JUCE Graphics facade)"]
+    Fw["Forthcoming UI framework  (widgets, layout, input — not this repo)"] --> Ctx["Context  (SkCanvas / JUCE Graphics facade)"]
+    App["Tools / examples"] --> Ctx
     Ctx --> Path["Path + Matrix"]
     Ctx --> Paint["Paint / Color / LinearGradient / Stroke"]
     Ctx --> Dev["Device interface"]
@@ -144,9 +180,11 @@ ctx.Save()
 ctx.Translate(40, 20)
 ctx.Rotate(0.3)
 ctx.ClipRect(paintengine2d.XYWH(0, 0, 200, 120))
+if ctx.QuickReject(bounds) { /* skip */ }
 ctx.DrawPath(path, paintengine2d.Fill(c))
 ctx.DrawPath(path, paintengine2d.StrokePaint(c, 4))
 ctx.DrawImageRect(src, srcRect, dstRect)
+ctx.DrawGlyphs(run, origin, paint)
 ctx.Restore()
 ctx.Clear(paintengine2d.Black)             // ignores clip; resets the surface
 ```
@@ -227,19 +265,21 @@ paintengine2d/           public API (module github.com/codemodify/paintengine2d)
 
 ## Positioning
 
-**paintengine2d** is an immediate-mode CPU canvas with its own rasterizer.
-It is not a widget toolkit, not a Skia/Cairo binding, and not a GPU UI stack.
+**paintengine2d** is the paint engine for a forthcoming Go desktop UI
+framework. Immediate-mode CPU rasterizer, retained-UI helpers (`Damage`,
+`QuickReject`, clip bounds). Not a widget toolkit, not a Skia/Cairo
+binding, and not a GPU UI stack.
 
 Where we win today: **pure Go**, **no CGO**, **own engine**, UI primitives
 (fill/stroke/clip/images/labels/dirty-rects) with a hardened AA/clip/stroke
-core. The default choice when you want a Go-native paint layer instead of
-Gio's toolkit, Fyne's GL stack, or a Cairo/Skia cgo binding.
+core. The default paint layer under that framework — and for tools that
+need a canvas without Gio, Fyne, or a C++ binding.
 
-Where we stop: **not a UI framework** (no widgets, IME, a11y), **not Skia**
+Where we stop: **not the UI framework** (no widgets, IME, a11y), **not Skia**
 (no GPU, no OpenType, no blend zoo, no PDF).
 
 `Damage` coalesces dirty boxes; `Context.SetDamage` records them on draw.
-Presents stay the UI layer's job.
+Presents stay the forthcoming UI layer's job.
 
 ### Compared with alternatives
 
@@ -249,7 +289,7 @@ shipping hardware backend, not a future hook.
 
 | | Language | CGO / native deps | Engine | GPU | UI toolkit | License (typical) | Best for |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **paintengine2d** | Go 1.22+ | **None** | **Own** CPU scanline AA | Hook only (`Device`) | No | MIT | UI-shaped Go canvas (widgets sit above); tools, tests, offline render |
+| **paintengine2d** | Go 1.22+ | **None** | **Own** CPU scanline AA | Hook only (`Device`) | No | MIT | Paint core for a forthcoming Go UI framework; tools, tests, offline render |
 | [Gio](https://gioui.org) | Go | Optional (platform windowing) | Own ops + GPU/CPU renderer | Yes | Yes (widgets, layout, input) | MIT / Unlicense | Full native Go GUIs; not a drop-in paint library |
 | [Fyne](https://fyne.io) | Go | OpenGL / platform via fyne | Own + GL | Yes (via GL) | Yes | BSD-3-Clause | Cross-platform Go apps with batteries-included widgets |
 | Skia bindings | Go/C++ | **Yes** (Skia + toolchain) | Binding | Yes | No (canvas only) | Skia BSD-3 | Production 2D when you want Skia’s completeness and accept CGO |
@@ -270,7 +310,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.4 (UI subset) |
+| Skia / typical canvas | paintengine2d v0.5 (UI subset) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | `Device` hook only |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |

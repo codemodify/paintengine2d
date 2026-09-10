@@ -32,6 +32,14 @@
 // Rasterization is delegated to a [Device]. v0 ships [CPUDevice]. A future
 // GPU device can implement the same interface without changing call sites.
 //
+// # Foundation for a UI framework
+//
+// This package is infrastructure, not an app toolkit. A separate Go desktop
+// UI framework will sit on top: widgets, layout, input, IME, and a11y live
+// there. [Context] / [Device] are the stable paint surface those widgets will
+// call ([Context.Save], clip, transform, images, [Context.DrawGlyphs],
+// [Damage]).
+//
 // # UI subset
 //
 // The production target is a UI-shaped CPU canvas: paths, AA fill/stroke,

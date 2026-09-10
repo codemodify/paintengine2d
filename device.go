@@ -4,6 +4,9 @@ package paintengine2d
 // LowLevelGraphicsContext. [Context] holds the public canvas state
 // (transform, clip, convenience paints) and forwards resolved draw ops here.
 //
+// This interface is the stable retarget seam for a forthcoming UI
+// framework: CPU today, a GPU [Device] later, same widget Paint calls.
+//
 // A GPU implementation can satisfy this interface without changing
 // application code that talks to Context. v0 ships only [CPUDevice].
 //

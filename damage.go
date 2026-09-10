@@ -2,9 +2,10 @@ package paintengine2d
 
 // Damage records dirty rectangles for UI-style partial redraw (Evas-like).
 //
-// The paint engine is still immediate-mode: draws composite now. A windowing
-// layer can attach a Damage to a [Context] via [Context.SetDamage] and, after
-// a frame, present only [Damage.Bounds] or the coalesced [Damage.Rects].
+// The paint engine is still immediate-mode: draws composite now. A forthcoming
+// retained UI framework can attach a Damage to a [Context] via
+// [Context.SetDamage], skip widgets with [Damage.Overlaps], and after a frame
+// present only [Damage.Bounds] or the coalesced [Damage.Rects].
 //
 // Rects are in device pixels. Overlapping or nearly adjacent boxes are merged
 // so the list stays small.
@@ -60,6 +61,21 @@ func unionRects(rs []Rect) Rect {
 		u = u.Union(r)
 	}
 	return u
+}
+
+// Overlaps reports whether any recorded dirty box intersects r (device pixels).
+// A UI layer uses this to decide whether a widget needs to paint.
+func (d *Damage) Overlaps(r Rect) bool {
+	if d == nil || r.Empty() {
+		return false
+	}
+	r = r.Canon()
+	for _, b := range d.Rects {
+		if b.Overlaps(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // ClipTo intersects every rect with bounds and drops empties.
