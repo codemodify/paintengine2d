@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.0 — 2026-09-10
+
+UI-subset production bar: dirty-rect helper and text hooks.
+
+### Added
+
+- `Damage` coalesce / clip / max-rects collapse; `Context.SetDamage` records
+  device-space dirty boxes on draw
+- Text hooks: `FontAtlas`, `AtlasCell`, `GlyphRun`, `Shaper`, `NullShaper`,
+  `Context.DrawGlyphs`, `Context.DrawLabel`
+- `NewBitmapAtlas` — built-in 5×7 ASCII sheet for labels (not a shaper)
+- Golden `ui_label`; README repositioned as a UI paint layer, not Skia
+
+### Framework work that stays above this library
+
+IME, OpenType/HarfBuzz, bidi, line breaking, accessibility, widget layout.
+
 ## 0.2.0 — 2026-09-10
 
 Production CPU bar: radial gradients, dashed strokes, image filter modes,
@@ -26,7 +43,7 @@ fuzz targets, and a larger regression suite.
 
 ### Planned (unchanged)
 
-- GPU `Device`, OpenType text, extra blend modes, SIMD, retained/damage
+- GPU `Device`, HarfBuzz/OpenType shaping, extra blend modes, SIMD
 
 ## 0.1.0 — 2026-09-10
 

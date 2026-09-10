@@ -1,8 +1,8 @@
 # paintengine2d
 
-A from-scratch **pure Go 2D paint / raster engine** — the canvas you reach for
-when you want anti-aliased vector fill and stroke without CGO and without
-binding someone else's toolkit.
+A from-scratch **pure Go 2D paint / raster engine** aimed at **UI primitives**
+— widgets, panels, icons, and labels — not Skia feature parity and not a
+widget toolkit. Anti-aliased fill/stroke, no CGO, own rasterizer.
 
 ```go
 img := paintengine2d.NewImage(640, 360)
@@ -13,11 +13,11 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.2.0
+go get github.com/codemodify/paintengine2d@v0.3.0
 ```
 
-**Not** a UI widget toolkit. **Not** Gio. **Not** a Skia / Cairo / Blend2D /
-NanoVG binding. The rasterizer is this repository's.
+**Not** a widget toolkit (no layout, input, IME, or a11y). **Not** Gio.
+**Not** a Skia / Cairo binding. Frameworks sit *on top* of this canvas.
 
 | | |
 | --- | --- |
@@ -29,17 +29,16 @@ NanoVG binding. The rasterizer is this repository's.
 ## Motivation
 
 Go's standard library can encode images, but it does not ship a paint engine.
-Existing options either pull a C/C++ engine through CGO, wrap a UI toolkit, or
-stop at a thin convenience layer. **paintengine2d** is a small, documented,
-testable CPU canvas with a `Device` seam so a GPU backend can be added later
-without changing call sites.
+**paintengine2d** is a small CPU canvas for UI-shaped drawing: rects, curves,
+clips, images, dirty-rects, and a text *hook* (glyph atlas blit). A GPU
+`Device` can be added later without changing call sites.
 
 Inspiration (algorithms and API shape only — no vendored code):
 
 - **AGG / Blend2D** — CPU scanline anti-aliasing
 - **JUCE Graphics** — high-level facade + `LowLevel` backend
 - **Skia `SkCanvas`** — canvas completeness (save, clip, path, image)
-- **Evas** — dirty-rect / damage (stubbed for later)
+- **Evas** — dirty-rect / damage helper for partial UI redraw
 - **Gio** — idiomatic Go packaging
 
 ## Quick start
@@ -61,35 +60,28 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.2.0 | Notes |
+| Feature | v0.3.0 | Notes |
 | --- | :---: | --- |
-| Path: move / line / quad / cubic / close | **done** | plus rect / round-rect / ellipse / circle / arc |
+| Path + rect / round-rect / circle / curves | **done** | UI primitives |
 | Affine transforms + save/restore | **done** | |
-| Solid fill, src-over blend | **done** | only Porter-Duff mode implemented |
-| Linear gradients + clamp/repeat/mirror | **done** | |
-| Radial gradients + tile modes | **done** | simple center/inner/radius (+ optional focal); no two-circle Skia mesh |
-| Stroke width, caps, joins, miter limit | **done** | width ≤ 0 is a no-op (no silent hairline) |
-| Dash patterns + dash offset | **done** | SVG on/off; odd arrays are doubled |
-| Fill rules: non-zero, even-odd | **done** | |
-| `ClipRect` / `ClipPath` (intersect, AA) | **done** | |
-| `DrawImage` / `DrawImageRect` | **done** | nearest + bilinear (`Paint.Filter`) |
-| Scanline AA | **done** | 8× Y + analytical X |
-| PNG encode/decode (stdlib) | **done** | |
-| `Device` + `CPUDevice` | **done** | GPU is a future `Device` |
-| Fuzz targets | **done** | path, matrix, raster, clip/image |
-| Conic gradients | planned | |
-| Full Porter-Duff / blend modes | planned | `Blend` field exists; non-src-over is not faked |
-| GPU device | planned | |
-| Text / OpenType shaping | planned | not a placeholder shaper |
-| Retained scene + Evas damage | stub | `Damage` type only |
-| SIMD | planned | |
-| Color management / HDR | planned | v0.2 is 8-bit sRGB premul |
+| Solid fill, src-over | **done** | only blend mode |
+| Linear gradients | **done** | clamp / repeat / mirror |
+| Radial gradients | extra | present; not required for UI bar |
+| Stroke caps / joins / miter | **done** | width ≤ 0 is a no-op |
+| Dashes | extra | present; not required for UI bar |
+| Clip rect + clip path | **done** | intersect |
+| Image blit nearest + bilinear | **done** | |
+| Dirty-rect `Damage` | **done** | coalesce + `Context.SetDamage` |
+| Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 bitmap atlas; no OpenType |
+| Scanline AA | **done** | |
+| `Device` + `CPUDevice` | **done** | |
+| GPU / SIMD / HDR / PDF | deferred | |
+| HarfBuzz-quality shaping, IME, a11y | **above this layer** | |
 
-**Stroke notes:** dashes are user-space (scale with the matrix). Closed
-contours are dashed as open pieces (caps on each dash). Non-uniform scale
-distorts stroke width the same way SVG / Skia do.
-
-**Text:** deferred on purpose.
+**Text:** [Context.DrawGlyphs] blits a font atlas. [Context.DrawLabel] uses
+[NullShaper] for ASCII bitmap labels. A future shaper implements [Shaper]
+only — no Context/Device break. IME, bidi, line-break, and a11y are
+framework concerns.
 
 ## Architecture
 
@@ -102,7 +94,8 @@ flowchart TB
     Dev --> CPU["CPUDevice  scanline AA"]
     Dev -.-> GPU["GPU Device  planned"]
     CPU --> Pix["Image pixmap  premul RGBA8888"]
-    Ctx -.-> Dmg["Damage stub  Evas-style dirty rects"]
+    Ctx --> Text["GlyphRun / FontAtlas / NullShaper"]
+    Ctx --> Dmg["Damage  dirty-rect coalesce"]
 ```
 
 - **`Context`** is the public canvas. It owns the transform / clip / paint stack.
@@ -182,7 +175,7 @@ go test -fuzz=FuzzRasterDraw -fuzztime=15s
 go test -fuzz=FuzzClipAndImage -fuzztime=15s
 ```
 
-Goldens compare premul RGBA with a small per-channel tolerance (17 scenes).
+Goldens compare premul RGBA with a small per-channel tolerance (18 scenes).
 Quality tests also assert geometry without files (circle AA rim, winding
 holes, dash gaps, nearest vs bilinear).
 
@@ -217,7 +210,8 @@ paintengine2d/           public API (module github.com/codemodify/paintengine2d)
   path.go geom.go …      geometry, paint, image, clip
   internal/raster/       flatten, scanline AA, stroke expand, blend
   examples/hello|gallery|paths
-  testdata/golden/       regression PNGs (17 scenes)
+  text.go bitmapfont.go  glyph atlas hooks + 5×7 label atlas
+  testdata/golden/       regression PNGs
   fuzz_test.go           native Go fuzz targets
 ```
 
@@ -226,13 +220,13 @@ paintengine2d/           public API (module github.com/codemodify/paintengine2d)
 **paintengine2d** is an immediate-mode CPU canvas with its own rasterizer.
 It is not a widget toolkit, not a Skia/Cairo binding, and not a GPU UI stack.
 
-Where we win today: **pure Go**, **no CGO in the paint core**, **own engine**
-(you can read and change every scanline), CPU 2D completeness for fill /
-stroke / clip / gradients / images. Where we are early: **no GPU backend
-yet**, **no text/OpenType**, no extra blend modes, no color management.
+Where we win today: **pure Go**, **no CGO**, **own engine**, UI primitives
+(fill/stroke/clip/images/labels/dirty-rects). Where we stop: **not a UI
+framework** (no widgets, IME, a11y), **not Skia** (no GPU, no OpenType,
+no blend zoo, no PDF).
 
-`Damage` exists as a named stub for a future retained / dirty-rect layer.
-It does not change what `Context` draws today.
+`Damage` coalesces dirty boxes; `Context.SetDamage` records them on draw.
+Presents stay the UI layer's job.
 
 ### Compared with alternatives
 
@@ -242,7 +236,7 @@ shipping hardware backend, not a future hook.
 
 | | Language | CGO / native deps | Engine | GPU | UI toolkit | License (typical) | Best for |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **paintengine2d** | Go 1.22+ | **None** | **Own** CPU scanline AA | Hook only (`Device`) | No | MIT | Embedding a small, readable Go canvas; tools, tests, offline render |
+| **paintengine2d** | Go 1.22+ | **None** | **Own** CPU scanline AA | Hook only (`Device`) | No | MIT | UI-shaped Go canvas (widgets sit above); tools, tests, offline render |
 | [Gio](https://gioui.org) | Go | Optional (platform windowing) | Own ops + GPU/CPU renderer | Yes | Yes (widgets, layout, input) | MIT / Unlicense | Full native Go GUIs; not a drop-in paint library |
 | [Fyne](https://fyne.io) | Go | OpenGL / platform via fyne | Own + GL | Yes (via GL) | Yes | BSD-3-Clause | Cross-platform Go apps with batteries-included widgets |
 | Skia bindings | Go/C++ | **Yes** (Skia + toolchain) | Binding | Yes | No (canvas only) | Skia BSD-3 | Production 2D when you want Skia’s completeness and accept CGO |
@@ -263,10 +257,10 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.2 |
+| Skia / typical canvas | paintengine2d v0.3 (UI subset) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | `Device` hook only |
-| Text, shapers, fonts | not shipped |
+| HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
 | Dozens of blend modes | src-over only (`Blend` reserved) |
 | Conic / sweep gradients, image shaders | no |
 | Two-circle radial, perspective | simple radial; affine only |

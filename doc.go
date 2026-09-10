@@ -32,6 +32,11 @@
 // Rasterization is delegated to a [Device]. v0 ships [CPUDevice]. A future
 // GPU device can implement the same interface without changing call sites.
 //
-// Text shaping, a retained scene graph, Evas-style dirty rectangles, SIMD,
-// and a GPU backend are intentionally out of scope for v0.
+// # UI subset
+//
+// The production target is a UI-shaped CPU canvas: paths, AA fill/stroke,
+// linear gradients, clip, images, and dirty-rect recording. Text is a hook:
+// [FontAtlas] + [GlyphRun] + [Context.DrawGlyphs], with [NullShaper] for
+// bitmap labels. IME, OpenType, and a11y belong in a framework above this
+// package. GPU, PDF, and HDR are out of scope.
 package paintengine2d
