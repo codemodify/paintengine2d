@@ -35,6 +35,12 @@ func TestGoldenImages(t *testing.T) {
 		{"stroke_scaled", sceneStrokeScaled, 96, 96},
 		{"diagonal_aa", sceneDiagonalAA, 80, 80},
 		{"glyph_clip", sceneGlyphClip, 80, 32},
+		{"arc_stroke", sceneArcStroke, 96, 96},
+		{"evenodd_clip", sceneEvenOddClip, 80, 80},
+		{"ui_button", sceneUIButton, 140, 48},
+		{"dash_offset", sceneDashOffset, 200, 40},
+		{"rotated_blit", sceneRotatedBlit, 80, 80},
+		{"radial_tiles", sceneRadialTiles, 160, 72},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -310,6 +316,75 @@ func sceneGlyphClip(ctx *Context) {
 	ctx.ClipRect(XYWH(6, 4, 40, 24))
 	ctx.DrawRoundRect(XYWH(4, 2, 72, 28), 4, 4, Fill(RGB(0.20, 0.32, 0.48)))
 	ctx.DrawLabel("CLIPPED", NewBitmapAtlas(White), Pt(8, 10), Paint{Color: White, Filter: FilterNearest})
+}
+
+func sceneArcStroke(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawCircle(Pt(48, 48), 28, StrokePaint(RGB(0.22, 0.26, 0.32), 6))
+	ctx.DrawArc(Pt(48, 48), 28, 28, -1.5708, 2.2, Paint{
+		Color:  RGB(0.25, 0.78, 0.52),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 6, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+}
+
+func sceneEvenOddClip(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.09, 0.12))
+	ctx.ClipPathRule(pentagram(Pt(40, 40), 34), FillEvenOdd)
+	ctx.DrawRect(XYWH(0, 0, 80, 80), Fill(RGB(0.95, 0.82, 0.28)))
+}
+
+func sceneUIButton(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	box := XYWH(12, 10, 116, 28)
+	ctx.DrawRoundRect(box, 6, 6, Fill(RGB(0.23, 0.51, 0.93)))
+	ctx.DrawRoundRect(box, 6, 6, StrokePaint(RGB(0.45, 0.70, 1.0), 1.25))
+	ctx.DrawLabel("Save", NewBitmapAtlas(White), Pt(48, 16), Paint{Color: White, Filter: FilterNearest})
+}
+
+func sceneDashOffset(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.08, 0.10))
+	for i, off := range []float32{0, 6, 12} {
+		y := float32(10 + i*12)
+		ctx.DrawLine(Pt(8, y), Pt(192, y), Paint{
+			Color: RGB(0.95, 0.80, 0.35),
+			Style: StyleStroke,
+			Stroke: Stroke{Width: 5, Cap: CapButt, Join: JoinMiter, MiterLimit: 4,
+				Dash: []float32{12, 8}, DashOffset: off},
+		})
+	}
+}
+
+func sceneRotatedBlit(ctx *Context) {
+	ctx.Clear(Gray(0.12))
+	src := NewImage(8, 8)
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			if x < 4 {
+				src.SetColor(x, y, RGB(0.95, 0.3, 0.25))
+			} else {
+				src.SetColor(x, y, RGB(0.2, 0.5, 0.95))
+			}
+		}
+	}
+	ctx.Translate(40, 40)
+	ctx.Rotate(0.35)
+	ctx.DrawImageRectPaint(src, XYWH(0, 0, 8, 8), XYWH(-20, -20, 40, 40), Paint{Color: White, Filter: FilterNearest})
+}
+
+func sceneRadialTiles(ctx *Context) {
+	ctx.Clear(Gray(0.10))
+	stops := []GradientStop{
+		{Offset: 0, Color: RGB(0.95, 0.85, 0.30)},
+		{Offset: 1, Color: RGB(0.20, 0.25, 0.70)},
+	}
+	for i, tile := range []TileMode{TileClamp, TileRepeat, TileMirror} {
+		x := float32(8 + i*50)
+		ctx.DrawCircle(Pt(x+20, 36), 22, Radial(RadialGradient{
+			Center: Pt(x+20, 36), Radius: 10,
+			Stops: stops, Tile: tile,
+		}))
+	}
 }
 
 func sceneBlit(ctx *Context) {

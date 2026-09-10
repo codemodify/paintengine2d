@@ -256,9 +256,12 @@ go test -fuzz=FuzzPathBuild -fuzztime=15s
 go test -fuzz=FuzzMatrix -fuzztime=15s
 go test -fuzz=FuzzRasterDraw -fuzztime=15s
 go test -fuzz=FuzzClipAndImage -fuzztime=15s
+go test -fuzz=FuzzWrapImage -fuzztime=15s
+go test -fuzz=FuzzDamage -fuzztime=15s
+go test -fuzz=FuzzTextHooks -fuzztime=15s
 ```
 
-Goldens compare premul RGBA with a small per-channel tolerance (22 scenes).
+Goldens compare premul RGBA with a small per-channel tolerance (28 scenes).
 Quality tests also assert geometry without files (circle AA rim, winding
 holes, dash gaps, nearest vs bilinear, NaN/degenerate, scaled strokes).
 
