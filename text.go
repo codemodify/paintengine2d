@@ -86,6 +86,34 @@ func (NullShaper) Shape(text string, atlas *FontAtlas) GlyphRun {
 	return run
 }
 
+// Bounds is the user-space AABB of every atlas cell in the run, placed at
+// origin. Empty if there is nothing to draw. A UI layer uses this for
+// hit-testing and dirty-rect inflation of labels.
+func (run GlyphRun) Bounds(origin Point) Rect {
+	if run.Atlas == nil || len(run.Glyphs) == 0 {
+		return Rect{}
+	}
+	var dirty Rect
+	for _, g := range run.Glyphs {
+		cell, ok := run.Atlas.Cell(g.ID)
+		if !ok || cell.Src.Empty() {
+			continue
+		}
+		dst := XYWH(
+			origin.X+g.X+cell.Bearing.X,
+			origin.Y+g.Y+cell.Bearing.Y,
+			cell.Src.Dx(),
+			cell.Src.Dy(),
+		)
+		if dirty.Empty() {
+			dirty = dst
+		} else {
+			dirty = dirty.Union(dst)
+		}
+	}
+	return dirty
+}
+
 // DrawGlyphs blits each atlas cell in run at origin (user space).
 // paint.Color.A modulates the blit; paint.Filter selects nearest/bilinear
 // (nearest is the usual choice for pixel fonts).

@@ -1,6 +1,9 @@
 package paintengine2d
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestDamageCoalesceOverlaps(t *testing.T) {
 	var d Damage
@@ -39,6 +42,51 @@ func TestDamageMaxRectsCollapses(t *testing.T) {
 	}
 	if d.Bounds().Dx() < 30 {
 		t.Fatalf("collapsed union too small %+v", d.Bounds())
+	}
+}
+
+func TestDamageMergesBeforeMaxRectsCollapse(t *testing.T) {
+	// 3 isolated boxes at MaxRects=3, then a 4th that overlaps the first.
+	// Old code appended then collapsed the whole union; a UI layer would
+	// redraw every widget. Merge-first keeps the other two isolated.
+	d := Damage{MaxRects: 3}
+	d.Add(XYWH(0, 0, 4, 4))
+	d.Add(XYWH(20, 0, 4, 4))
+	d.Add(XYWH(40, 0, 4, 4))
+	d.Add(XYWH(2, 2, 4, 4)) // overlaps first
+	if len(d.Rects) != 3 {
+		t.Fatalf("overlapping 4th should merge, not collapse, got %d %+v", len(d.Rects), d.Rects)
+	}
+	if !d.Overlaps(XYWH(0, 0, 6, 6)) {
+		t.Fatal("merged first cluster")
+	}
+	if d.Overlaps(XYWH(10, 10, 2, 2)) {
+		t.Fatal("gap between isolated dirty boxes must stay clean")
+	}
+}
+
+func TestDamageMergesTouchingEdges(t *testing.T) {
+	var d Damage
+	d.Add(XYWH(0, 0, 10, 10))
+	d.Add(XYWH(10, 0, 10, 10)) // share an edge
+	if len(d.Rects) != 1 {
+		t.Fatalf("touching edges should coalesce, got %d", len(d.Rects))
+	}
+	if d.Bounds().Dx() != 20 || d.Bounds().Dy() != 10 {
+		t.Fatalf("union %+v", d.Bounds())
+	}
+}
+
+func TestDamageIgnoresNonFinite(t *testing.T) {
+	var d Damage
+	nan := float32(math.NaN())
+	d.Add(Rect{Min: Pt(0, 0), Max: Pt(nan, 4)})
+	if !d.Empty() {
+		t.Fatalf("NaN dirty rect should be ignored, got %+v", d.Rects)
+	}
+	d.Add(XYWH(1, 1, 4, 4))
+	if d.Empty() {
+		t.Fatal("finite rect should record")
 	}
 }
 

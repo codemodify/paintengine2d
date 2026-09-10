@@ -187,11 +187,9 @@ func (c *Context) SetFill(p Paint) {
 }
 
 // SetStroke sets the paint used by [Context.StrokePath]. Style is forced to stroke.
+// Width <= 0 is kept as-is and makes a later [Context.StrokePath] a no-op.
 func (c *Context) SetStroke(p Paint) {
 	p.Style = StyleStroke
-	if p.Stroke.Width <= 0 {
-		p.Stroke = DefaultStroke()
-	}
 	c.cur.stroke = p
 }
 
@@ -255,10 +253,15 @@ func (c *Context) rectScratch(r Rect) *Path {
 	return p
 }
 
-// ClipPath intersects the clip with path (filled, current fill rule / transform).
-// Coverage is rasterized only over the path's device-space bounds (typical UI
-// clips are small rounded rects, not the full window).
+// ClipPath intersects the clip with path filled with the non-zero rule.
+// Typical UI clips are rounded rects and circles. For even-odd clips
+// (stars, compound holes) use [Context.ClipPathRule].
 func (c *Context) ClipPath(path *Path) {
+	c.ClipPathRule(path, FillNonZero)
+}
+
+// ClipPathRule is [Context.ClipPath] with an explicit interior rule.
+func (c *Context) ClipPathRule(path *Path, rule FillRule) {
 	if path == nil || path.Empty() || !c.cur.xform.Finite() {
 		c.cur.clip.scissor = Rect{}
 		c.cur.clip.hasScissor = true
@@ -297,7 +300,9 @@ func (c *Context) ClipPath(path *Path) {
 		clip.MaskY -= y0
 	}
 	tmp.Clear(Transparent)
-	tmp.Fill(path, shifted, Fill(White), clip)
+	maskPaint := Fill(White)
+	maskPaint.FillRule = rule
+	tmp.Fill(path, shifted, maskPaint, clip)
 	newMask := make([]byte, bw*bh)
 	for i := 0; i < bw*bh; i++ {
 		newMask[i] = maskImg.Pix[i*4+3]
@@ -379,9 +384,14 @@ func (c *Context) markDirtyUser(r Rect) {
 		return
 	}
 	dev := c.cur.xform.TransformRect(r)
+	if !dev.Finite() {
+		return
+	}
 	if c.cur.clip.hasScissor {
 		dev = dev.Intersect(c.cur.clip.scissor)
 	}
+	w, h := c.dev.Size()
+	dev = dev.Intersect(XYWH(0, 0, float32(w), float32(h)))
 	c.damage.Add(dev)
 }
 
@@ -436,6 +446,9 @@ func (c *Context) DrawRect(r Rect, paint Paint) {
 // FillRect fills r with the convenience fill paint.
 func (c *Context) FillRect(r Rect) { c.DrawRect(r, c.cur.fill) }
 
+// StrokeRect strokes r with the convenience stroke paint.
+func (c *Context) StrokeRect(r Rect) { c.DrawRect(r, c.cur.stroke) }
+
 // DrawRoundRect draws a rounded rectangle.
 func (c *Context) DrawRoundRect(r Rect, rx, ry float32, paint Paint) {
 	p := c.pathScratch()
@@ -454,6 +467,15 @@ func (c *Context) DrawOval(r Rect, paint Paint) {
 func (c *Context) DrawCircle(center Point, radius float32, paint Paint) {
 	p := c.pathScratch()
 	p.AddCircle(center, radius)
+	c.DrawPath(p, paint)
+}
+
+// DrawArc draws an elliptical arc centered at center. start and sweep are
+// radians (0 = +X, positive clockwise). Style comes from paint (stroke is
+// the usual UI choice for progress rings and knobs).
+func (c *Context) DrawArc(center Point, rx, ry, start, sweep float32, paint Paint) {
+	p := c.pathScratch()
+	p.AddArc(center, rx, ry, start, sweep)
 	c.DrawPath(p, paint)
 }
 

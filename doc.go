@@ -22,9 +22,10 @@
 //
 // # Pixel format
 //
-// [Image] stores premultiplied 8-bit sRGB RGBA, tightly packed
-// (stride = width * 4). PNG encode/decode converts to and from straight
-// (non-premultiplied) alpha as expected by the standard library.
+// [Image] stores premultiplied 8-bit sRGB RGBA. [NewImage] is tightly
+// packed (stride = width * 4). [WrapImage] accepts a caller buffer whose
+// row stride may be padded (swapchain / X11 / Wayland shm). PNG
+// encode/decode converts to and from straight (non-premultiplied) alpha.
 //
 // # Backends
 //
