@@ -1,0 +1,48 @@
+---
+description: Zero agent names in git history; land on dev as codemodify only
+alwaysApply: true
+---
+
+# Git identity — zero agent names
+
+Every commit **author** and **committer** on this repository must be only:
+
+- Name: `codemodify`
+- Email: `codemodify@linux.com`
+
+Forbidden in authors, committers, subjects, bodies, and branch names:
+
+- `cursor[bot]`, `Cursor Agent`, `cursoragent@`, `users.noreply.github.com` bot addresses
+- `Co-authored-by:` trailers for Cursor / agents (a trailer for `codemodify` is fine)
+- Branch names or subjects that say `cursor/...`
+- GitHub “Merge pull request #N” commits created by the bot
+
+This environment’s default `user.name` / `user.email` is Cursor Agent. **Override every commit:**
+
+```bash
+export GIT_AUTHOR_NAME=codemodify
+export GIT_AUTHOR_EMAIL=codemodify@linux.com
+export GIT_COMMITTER_NAME=codemodify
+export GIT_COMMITTER_EMAIL=codemodify@linux.com
+```
+
+## How to land work on `dev`
+
+Do **not** use GitHub’s merge UI (merge commit, squash, or rebase) when the GitHub actor would be `cursor[bot]` or any agent. That is how `cursor[bot]` merge commits appear.
+
+Prefer this instead:
+
+1. Squash locally onto `dev` as `codemodify <codemodify@linux.com>`.
+2. Use a normal conventional message (`feat: …`, `fix: …`). No PR numbers, no `cursor/` branch names, no bot wording.
+3. Push directly to `dev`.
+4. If a bot merge exists anyway: amend or rewrite (`git rebase` / `git filter-branch`) so the bot commit is gone, then force-push `dev`.
+
+Do **not** open GitHub PRs from `cursor/*` branches for this repo. Merging those as the bot recreates agent-authored history.
+
+After any rewrite, confirm:
+
+```bash
+git log --format='%h %an <%ae> %cn <%ce> %s' dev
+```
+
+Every line must be `codemodify <codemodify@linux.com>` and no subject may contain cursor, agent, or bot.
