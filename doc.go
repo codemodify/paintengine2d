@@ -47,11 +47,11 @@
 //
 // # UI subset
 //
-// The production target is a UI-shaped CPU canvas: paths, AA fill/stroke,
-// linear gradients, clip, images, and dirty-rect recording. Text is a hook:
-// [FontAtlas] + [GlyphRun] + [Context.DrawGlyphs], with [NullShaper] for
-// bitmap labels. IME, OpenType, and a11y belong in a framework above this
-// package. GPU, PDF, and HDR are out of scope.
+// v0.7 is UI-foundation ready: paths, AA fill/stroke, linear (and radial)
+// gradients, clip rect/path, images, WrapImage stride, dirty-rect recording,
+// and text hooks ([FontAtlas] + [GlyphRun] + [Shaper] + [Context.DrawGlyphs],
+// with [NullShaper] for bitmap labels). IME, OpenType, and a11y belong in a
+// framework above this package. GPU, PDF, and HDR are out of scope.
 //
 // # Skia / JUCE mapping
 //

@@ -5,6 +5,12 @@ import "testing"
 // Hooks a forthcoming retained UI framework will call. No widgets here —
 // just the canvas queries and the paint-cycle shape.
 
+func TestVersionIsFoundationReady(t *testing.T) {
+	if Version != "0.7.0" {
+		t.Fatalf("Version %q, want 0.7.0 UI-foundation ready", Version)
+	}
+}
+
 func TestSizeAndSaveCount(t *testing.T) {
 	img := NewImage(80, 40)
 	ctx := NewContext(img)
