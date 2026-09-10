@@ -50,6 +50,20 @@ func TestMatrixRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRectUnionInsetCenter(t *testing.T) {
+	r := XYWH(0, 0, 10, 8).Union(XYWH(8, 6, 10, 8))
+	if r.Min.X != 0 || r.Max.X != 18 || r.Max.Y != 14 {
+		t.Fatalf("union %+v", r)
+	}
+	s := XYWH(0, 0, 10, 10).Inset(2)
+	if s.Dx() != 6 || s.Center() != Pt(5, 5) {
+		t.Fatalf("inset/center %+v %+v", s, s.Center())
+	}
+	if !XYWH(0, 0, 0, 0).Empty() {
+		t.Fatal("empty")
+	}
+}
+
 func TestColorPremul(t *testing.T) {
 	c := RGBA(1, 0, 0, 0.5)
 	r, g, b, a := c.Premul8()
