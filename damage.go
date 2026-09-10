@@ -24,8 +24,16 @@ func (d *Damage) Add(r Rect) {
 		return
 	}
 	r = r.Canon()
-	if r.Empty() {
+	if r.Empty() || !r.Finite() {
 		return
+	}
+	pad := d.Pad
+	for i := range d.Rects {
+		if rectsNear(d.Rects[i], r, pad) {
+			d.Rects[i] = d.Rects[i].Union(r)
+			d.coalesce()
+			return
+		}
 	}
 	d.Rects = append(d.Rects, r)
 	d.coalesce()
@@ -106,12 +114,9 @@ func (d *Damage) coalesce() {
 	if d == nil || len(d.Rects) < 2 {
 		return
 	}
-	if len(d.Rects) > d.maxN() {
-		u := unionRects(d.Rects)
-		d.Rects = d.Rects[:1]
-		d.Rects[0] = u
-		return
-	}
+	// Merge overlapping / touching boxes first. Collapsing to a single
+	// union only after that keeps MaxRects from exploding the dirty
+	// region when the N+1st widget overlaps an existing dirty box.
 	pad := d.Pad
 	changed := true
 	for changed {
@@ -133,14 +138,22 @@ func (d *Damage) coalesce() {
 		}
 		d.Rects = out
 	}
+	if len(d.Rects) > d.maxN() {
+		u := unionRects(d.Rects)
+		d.Rects = d.Rects[:1]
+		d.Rects[0] = u
+	}
 }
 
 func rectsNear(a, b Rect, pad float32) bool {
 	if a.Empty() || b.Empty() {
 		return false
 	}
-	a = a.Inset(-pad)
-	return a.Overlaps(b) ||
-		(a.Max.X >= b.Min.X && a.Min.X <= b.Max.X && (a.Max.Y == b.Min.Y || b.Max.Y == a.Min.Y)) ||
-		(a.Max.Y >= b.Min.Y && a.Min.Y <= b.Max.Y && (a.Max.X == b.Min.X || b.Max.X == a.Min.X))
+	if pad < 0 {
+		pad = 0
+	}
+	// Inclusive touch: inflate by pad plus a tiny epsilon so shared
+	// edges and float-rounded dirty boxes from transforms still merge.
+	a = a.Inset(-(pad + 1e-3))
+	return a.Overlaps(b)
 }

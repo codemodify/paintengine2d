@@ -48,6 +48,78 @@ func TestWrapImageRejectsShortBuffer(t *testing.T) {
 	}
 }
 
+func TestWrapImageZeroAndNegativeRejected(t *testing.T) {
+	buf := make([]byte, 64)
+	if WrapImage(buf, 0, 4, 0) != nil || WrapImage(buf, 4, 0, 0) != nil {
+		t.Fatal("zero size")
+	}
+	if WrapImage(buf, -1, 4, 16) != nil || WrapImage(nil, 4, 4, 16) != nil {
+		t.Fatal("invalid wrap")
+	}
+}
+
+func TestWrapImagePaddedSourceBlit(t *testing.T) {
+	const w, h, pad = 6, 4, 12
+	stride := w*4 + pad
+	buf := make([]byte, h*stride)
+	for i := range buf {
+		buf[i] = 0x5A
+	}
+	src := WrapImage(buf, w, h, stride)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			src.SetColor(x, y, RGB(0, 1, 0))
+		}
+	}
+	// Padding must still be 0x5A after SetColor.
+	for y := 0; y < h; y++ {
+		for i := w * 4; i < stride; i++ {
+			if buf[y*stride+i] != 0x5A {
+				t.Fatalf("src padding clobbered at y=%d i=%d", y, i)
+			}
+		}
+	}
+	dst := NewImage(12, 8)
+	ctx := NewContext(dst)
+	ctx.DrawImageRectPaint(src, XYWH(0, 0, 6, 4), XYWH(1, 1, 6, 4), Paint{Color: White, Filter: FilterNearest})
+	_, g, _, a := dst.PremulAt(2, 2)
+	if a < 250 || g < 250 {
+		t.Fatalf("padded source blit g=%d a=%d", g, a)
+	}
+}
+
+func TestWrapImagePaddedDestStrokeAndLabel(t *testing.T) {
+	const w, h, pad = 48, 24, 20
+	stride := w*4 + pad
+	buf := make([]byte, h*stride)
+	for i := range buf {
+		buf[i] = 0x3C
+	}
+	img := WrapImage(buf, w, h, stride)
+	ctx := NewContext(img)
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRoundRect(XYWH(4, 4, 40, 16), 4, 4, Fill(RGB(0.2, 0.5, 0.9)))
+	ctx.DrawLabel("OK", NewBitmapAtlas(White), Pt(16, 8), Paint{Color: White, Filter: FilterNearest})
+	if _, _, _, a := img.PremulAt(8, 10); a < 200 {
+		t.Fatalf("paint into padded dest a=%d", a)
+	}
+	for y := 0; y < h; y++ {
+		for i := w * 4; i < stride; i++ {
+			if buf[y*stride+i] != 0x3C {
+				t.Fatalf("dest padding clobbered y=%d i=%d val=%#x", y, i, buf[y*stride+i])
+			}
+		}
+	}
+	packed := img.Clone()
+	if packed.RowStride() != packed.Width*4 {
+		t.Fatal("clone should be packed")
+	}
+	sub := img.SubImage(4, 4, 12, 12)
+	if sub.Width != 8 || sub.Height != 8 {
+		t.Fatalf("sub %dx%d", sub.Width, sub.Height)
+	}
+}
+
 func TestDecorationStripPaintCycle(t *testing.T) {
 	// WM-style: paint a titlebar + border into a surface buffer. Not a WM.
 	const w, h = 80, 48
