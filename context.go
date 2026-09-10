@@ -253,6 +253,19 @@ func (c *Context) rectScratch(r Rect) *Path {
 	return p
 }
 
+// ClipEmpty reports whether the current clip has no remaining device pixels.
+// A retained UI layer can skip painting after a clip that missed the canvas.
+func (c *Context) ClipEmpty() bool {
+	return c.DeviceClipBounds().Empty()
+}
+
+// ClipRoundRect intersects the clip with a rounded rectangle in user space.
+func (c *Context) ClipRoundRect(r Rect, rx, ry float32) {
+	p := c.pathScratch()
+	p.AddRoundRect(r, rx, ry)
+	c.ClipPath(p)
+}
+
 // ClipPath intersects the clip with path filled with the non-zero rule.
 // Typical UI clips are rounded rects and circles. For even-odd clips
 // (stars, compound holes) use [Context.ClipPathRule].
@@ -323,9 +336,19 @@ func (c *Context) ClipPathRule(path *Path, rule FillRule) {
 }
 
 func (c *Context) ensureClipScratch(w, h int) *Image {
-	if c.clipScratch == nil || c.clipScratch.Width != w || c.clipScratch.Height != h {
+	need := w * h * 4
+	if c.clipScratch == nil {
 		c.clipScratch = NewImage(w, h)
+		return c.clipScratch
 	}
+	if cap(c.clipScratch.Pix) < need {
+		c.clipScratch.Pix = make([]byte, need)
+	} else {
+		c.clipScratch.Pix = c.clipScratch.Pix[:need]
+	}
+	c.clipScratch.Width = w
+	c.clipScratch.Height = h
+	c.clipScratch.Stride = w * 4
 	return c.clipScratch
 }
 

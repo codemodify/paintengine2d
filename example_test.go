@@ -14,5 +14,5 @@ func Example() {
 	ctx.DrawCircle(paintengine2d.Pt(64, 64), 28, paintengine2d.StrokePaint(paintengine2d.White, 4))
 
 	fmt.Println(img.Width, img.Height, paintengine2d.Version)
-	// Output: 128 128 0.7.0
+	// Output: 128 128 0.7.1
 }

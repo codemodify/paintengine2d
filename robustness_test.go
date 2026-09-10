@@ -150,7 +150,7 @@ func TestStrokeWarmPathBoundedAllocs(t *testing.T) {
 	allocs := testing.AllocsPerRun(40, func() {
 		ctx.DrawPath(p, paint)
 	})
-	if allocs > 24 {
-		t.Fatalf("warm stroke allocs/op = %.1f, want <= 24", allocs)
+	if allocs != 0 {
+		t.Fatalf("warm stroke allocs/op = %.1f, want 0", allocs)
 	}
 }

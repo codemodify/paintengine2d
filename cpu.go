@@ -20,6 +20,7 @@ type CPUDevice struct {
 	cover    []uint16
 	// outlineStore reuses transformed stroke outlines across draw calls.
 	outlineStore [][]raster.Vec2
+	strokePool   raster.StrokePool
 }
 
 // NewCPUDevice wraps img. The image must outlive the device. Passing nil
@@ -86,7 +87,7 @@ func (d *CPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 		Join:       int(st.Join),
 		MiterLimit: st.MiterLimit,
 	}
-	outlines := raster.ExpandStroke(userContours, userClosed, opt)
+	outlines := d.strokePool.Expand(userContours, userClosed, opt)
 	if len(outlines) == 0 {
 		return
 	}

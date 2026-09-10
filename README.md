@@ -25,7 +25,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.7.0
+go get github.com/codemodify/paintengine2d@v0.7.1
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -78,7 +78,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.7.0 | Notes |
+| Feature | v0.7.1 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -225,7 +225,7 @@ ctx.Save()
 ctx.Translate(40, 20)
 ctx.Rotate(0.3)
 ctx.ClipRect(paintengine2d.XYWH(0, 0, 200, 120))
-if ctx.QuickReject(bounds) { /* skip */ }
+if ctx.ClipEmpty() || ctx.QuickReject(bounds) { /* skip */ }
 ctx.DrawPath(path, paintengine2d.Fill(c))
 ctx.DrawPath(path, paintengine2d.StrokePaint(c, 4))
 ctx.StrokeRect(r)
@@ -265,9 +265,10 @@ go test -fuzz=FuzzClipAndImage -fuzztime=15s
 go test -fuzz=FuzzWrapImage -fuzztime=15s
 go test -fuzz=FuzzDamage -fuzztime=15s
 go test -fuzz=FuzzTextHooks -fuzztime=15s
+go test -fuzz=FuzzClipTransform -fuzztime=15s
 ```
 
-Goldens compare premul RGBA with a small per-channel tolerance (28 scenes).
+Goldens compare premul RGBA with a small per-channel tolerance (35 scenes).
 Quality tests also assert geometry without files (circle AA rim, winding
 holes, dash gaps, nearest vs bilinear, NaN/degenerate, scaled strokes).
 
@@ -287,17 +288,19 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 | Benchmark | size | time/op | allocs/op |
 | --- | --- | ---: | ---: |
 | `BenchmarkFillRect` | 512² | 0.15 ms | **0** |
-| `BenchmarkFillComplexPath` | 512² | 1.25 ms | 1 |
-| `BenchmarkStroke` | 512² blob | 2.03 ms | 7 |
-| `BenchmarkManySmallPaths` | 16×16 circles | 50 ms | 257 |
-| `BenchmarkFillCircleUI` | 64² / r=14 | 20 µs | 1 |
-| `BenchmarkStrokeRoundRectUI` | 128×48 | 51 µs | 7 |
-| `BenchmarkImageBlit` | 128→384 bilinear | 3.3 ms | **0** |
-| `BenchmarkImageBlitNearestUI` | 32→32 1:1 | 5.8 µs | **0** |
+| `BenchmarkFillComplexPath` | 512² | 1.25 ms | **0** |
+| `BenchmarkStroke` | 512² blob | 2.37 ms | **0** |
+| `BenchmarkManySmallPaths` | 16×16 circles | 54 ms | 1 (was 257) |
+| `BenchmarkFillCircleUI` | 64² / r=14 | 20 µs | **0** |
+| `BenchmarkStrokeRoundRectUI` | 128×48 | 51 µs | **0** |
+| `BenchmarkImageBlit` | 128→384 bilinear | 3.4 ms | **0** |
+| `BenchmarkImageBlitNearestUI` | 32→32 1:1 | 5.9 µs | **0** |
 | `BenchmarkDrawLabel` | 80×20 | 1.5 µs | 4 |
 
-`TestFillRectZeroAllocs` guards the opaque-rect hot path. `TestStrokeWarmPathBoundedAllocs`
-caps warm stroke allocs. Gradient/first-stroke allocs are still flatten-bound.
+`TestFillRectZeroAllocs` and `TestBlitNearest1to1ZeroAllocs` guard the blit
+hot paths. `TestStrokeWarmPathBoundedAllocs` / `TestFillCircleWarmZeroAllocs`
+require warm stroke and circle fill to stay at 0 allocs. First-draw flatten
+and clip-mask builds still allocate.
 
 ## Layout
 
@@ -389,8 +392,8 @@ of this module. Do not grow widgets or windowing here.
 | 4 | Images: DrawImage/DrawImageRect, nearest+bilinear, WrapImage/stride | **yes** |
 | 5 | Text hooks: FontAtlas / GlyphRun / Shaper + bitmap/atlas blit (HarfBuzz later) | **yes** |
 | 6 | Damage: dirty-rect coalescing + QuickReject / clip bounds | **yes** |
-| 7 | Correctness: unit + 28 goldens; fuzz without panic; `CGO_ENABLED=0` green | **yes** |
-| 8 | Perf: benches documented; opaque FillRect and 1:1 nearest blit are 0-alloc | **yes** |
+| 7 | Correctness: unit + 35 goldens; fuzz without panic; `CGO_ENABLED=0` green | **yes** |
+| 8 | Perf: benches documented; FillRect, 1:1 nearest blit, warm stroke/path fill are 0-alloc | **yes** |
 | 9 | Docs: layering, feature matrix, limitations, how to verify | **yes** |
 | 10 | API stability notes for a UI kit | **yes** (below) |
 
@@ -412,12 +415,13 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 **Will not break without a major version**
 
 - [Context] canvas: `Save` / `Restore` / `SaveCount`, `Translate` / `Scale` /
-  `Rotate` / `SetMatrix` / `Transform`, `ClipRect` / `ClipPath` /
-  `ClipPathRule`, `Clear`, `FillRect` / `StrokeRect`, `FillPath` /
+  `Rotate` / `SetMatrix` / `Transform`, `ClipRect` / `ClipRoundRect` /
+  `ClipPath` / `ClipPathRule`, `Clear`, `FillRect` / `StrokeRect`, `FillPath` /
   `StrokePath` / `DrawPath`, `DrawRect` / `DrawRoundRect` / `DrawOval` /
   `DrawCircle` / `DrawArc` / `DrawLine`
 - Images: `DrawImage` / `DrawImageRect` / `DrawImageRectPaint`
-- Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`
+- Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`,
+  `ClipEmpty`
 - [Device] + [CPUDevice] (GPU can implement `Device` later)
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
   stride; padding bytes are never written
@@ -425,7 +429,8 @@ surface. Additive changes are fine; renaming or changing meaning is not.
   `AddArc`
 - [Paint]: solid color, [LinearGradient] / [RadialGradient], tile modes,
   stroke caps/joins/miter, dashes, `FilterNearest` / `FilterBilinear`
-- [Damage] + `Context.SetDamage`: coalesce, `Overlaps`, `ClipTo`, `Bounds`
+- [Damage] + `Context.SetDamage`: coalesce, `Overlaps`, `ClipTo`, `Bounds`,
+  `Count`, `Empty`
 - Text hooks: [FontAtlas], [AtlasCell], [GlyphRun], [Shaper], [NullShaper],
   `DrawGlyphs`, `DrawLabel`, `GlyphRun.Bounds`
 - Pixel convention: +X right, +Y down; pixel `(0,0)` covers `[0,1]×[0,1]`

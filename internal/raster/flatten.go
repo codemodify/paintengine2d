@@ -36,10 +36,16 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 		return make([]Vec2, 0, 16)
 	}
 
-	cur := take()
+	var cur []Vec2
 	var start Vec2
 	var hasStart, hasCur bool
 	pi := 0
+
+	ensure := func() {
+		if cur == nil {
+			cur = take()
+		}
+	}
 
 	flush := func(isClosed bool) {
 		if len(cur) >= 2 {
@@ -48,10 +54,10 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			}
 			*contours = append(*contours, cur)
 			*closed = append(*closed, isClosed)
-			cur = take()
-		} else {
-			cur = cur[:0]
 		}
+		// Do not take() a leftover slice here — that allocated once per draw
+		// on single-contour UI paths. The next Move/point calls ensure().
+		cur = nil
 		hasStart, hasCur = false, false
 	}
 
@@ -65,6 +71,7 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 				continue
 			}
 			start, hasStart, hasCur = p, true, true
+			ensure()
 			cur = append(cur, p)
 		case Line:
 			p := pts[pi]
@@ -74,6 +81,7 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			}
 			if !hasCur {
 				start, hasStart, hasCur = p, true, true
+				ensure()
 				cur = append(cur, p)
 				continue
 			}
@@ -87,6 +95,7 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			}
 			if !hasCur {
 				start, hasStart, hasCur = c, true, true
+				ensure()
 				cur = append(cur, c)
 			}
 			from := cur[len(cur)-1]
@@ -101,6 +110,7 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			}
 			if !hasCur {
 				start, hasStart, hasCur = c1, true, true
+				ensure()
 				cur = append(cur, c1)
 			}
 			from := cur[len(cur)-1]

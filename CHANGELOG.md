@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.7.1 — 2026-09-11
+
+Production hardening on the v0.7 UI-foundation surface. Still pixels-only:
+no widgets, no windowing.
+
+### Added
+
+- `Context.ClipEmpty`, `Context.ClipRoundRect`, `Damage.Count`
+- Goldens: `ui_focus_ring`, `ui_scroll_thumb`, `ui_overlap_damage`,
+  `aa_thin_diag`, `aa_tiny_glyphs`, `clip_xform_edge`, `wrap_shm_pad`
+  (35 scenes)
+- Fuzz: `FuzzClipTransform`
+- Tests: focus ring, scroll thumb, overlapping damage, thin-diagonal AA,
+  tiny glyphs, clip∩transform, padded shm stress, 1:1 blit 0-alloc
+
+### Changed
+
+- Stroke expansion reuses a `StrokePool` on `CPUDevice` (warm stroke 0 alloc)
+- Flatten no longer allocates a leftover contour slice per draw
+- Clip-path scratch pixmap grows instead of reallocating on size mismatch
+- Rasterizer borrows the edge slice (no per-draw copy)
+
+### Overnight status
+
+`CGO_ENABLED=0 go test ./...` green. Short fuzz campaigns (8s each, including
+`FuzzClipTransform`) green. FillRect, 1:1 nearest blit, warm path fill, and
+warm stroke are 0 alloc. Stale PRs #7–#10 closed (work already on `dev`).
+
 ## 0.7.0 — 2026-09-10
 
 **UI-foundation ready.** The CPU paint core is complete enough to start a

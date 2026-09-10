@@ -41,6 +41,13 @@ func TestGoldenImages(t *testing.T) {
 		{"dash_offset", sceneDashOffset, 200, 40},
 		{"rotated_blit", sceneRotatedBlit, 80, 80},
 		{"radial_tiles", sceneRadialTiles, 160, 72},
+		{"ui_focus_ring", sceneUIFocusRing, 140, 48},
+		{"ui_scroll_thumb", sceneUIScrollThumb, 28, 96},
+		{"ui_overlap_damage", sceneUIOverlapDamage, 160, 64},
+		{"aa_thin_diag", sceneAAThinDiag, 80, 80},
+		{"aa_tiny_glyphs", sceneAATinyGlyphs, 120, 32},
+		{"clip_xform_edge", sceneClipXformEdge, 96, 96},
+		{"wrap_shm_pad", sceneWrapShmPad, 80, 48},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -385,6 +392,94 @@ func sceneRadialTiles(ctx *Context) {
 			Stops: stops, Tile: tile,
 		}))
 	}
+}
+
+func sceneUIFocusRing(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	box := XYWH(16, 10, 108, 28)
+	ctx.DrawRoundRect(box.Inset(-3), 8, 8, Paint{
+		Color:  RGB(0.40, 0.72, 1.0),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 2, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+	ctx.DrawRoundRect(box, 6, 6, Fill(RGB(0.23, 0.51, 0.93)))
+	ctx.DrawLabel("Open", NewBitmapAtlas(White), Pt(50, 16), Paint{Color: White, Filter: FilterNearest})
+}
+
+func sceneUIScrollThumb(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRoundRect(XYWH(8, 6, 12, 84), 6, 6, Fill(RGB(0.16, 0.17, 0.20)))
+	ctx.DrawRoundRect(XYWH(9, 22, 10, 28), 5, 5, Fill(RGB(0.48, 0.50, 0.58)))
+}
+
+func sceneUIOverlapDamage(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	a := XYWH(12, 10, 72, 36)
+	b := XYWH(56, 18, 88, 32)
+	ctx.DrawRoundRect(a, 6, 6, Fill(RGBA(0.95, 0.38, 0.30, 0.88)))
+	ctx.DrawRoundRect(b, 6, 6, Fill(RGBA(0.25, 0.55, 0.95, 0.80)))
+	ctx.DrawRoundRect(a.Union(b).Inset(-1), 0, 0, Paint{
+		Color:  RGB(0.95, 0.85, 0.35),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 1, Cap: CapButt, Join: JoinMiter, MiterLimit: 4},
+	})
+}
+
+func sceneAAThinDiag(ctx *Context) {
+	ctx.Clear(Gray(0.10))
+	ctx.DrawLine(Pt(4, 6), Pt(76, 22), Paint{
+		Color:  White,
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 0.6, Cap: CapButt, Join: JoinMiter, MiterLimit: 4},
+	})
+	ctx.DrawLine(Pt(6, 74), Pt(74, 8), Paint{
+		Color:  RGB(0.35, 0.80, 1.0),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 0.85, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+	ctx.DrawLine(Pt(8, 40), Pt(72, 52), Paint{
+		Color:  RGB(0.95, 0.75, 0.30),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 1.0, Cap: CapButt, Join: JoinMiter, MiterLimit: 4},
+	})
+}
+
+func sceneAATinyGlyphs(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	atlas := NewBitmapAtlas(White)
+	ctx.DrawLabel("ok /_%", atlas, Pt(6, 6), Paint{Color: White, Filter: FilterNearest})
+	ctx.DrawLabel("i=1", atlas, Pt(6, 18), Paint{Color: RGB(0.7, 0.85, 1), Filter: FilterNearest})
+	ctx.DrawLabel("xy", atlas, Pt(70.4, 10.6), Paint{Color: RGB(0.95, 0.8, 0.4), Filter: FilterNearest})
+}
+
+func sceneClipXformEdge(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.09, 0.12))
+	ctx.Save()
+	ctx.Translate(48, 48)
+	ctx.Rotate(0.55)
+	ctx.ClipRoundRect(XYWH(-22, -18, 44, 36), 8, 8)
+	ctx.Scale(1.15, 0.85)
+	ctx.DrawRect(XYWH(-30, -24, 60, 48), Fill(RGB(0.90, 0.32, 0.38)))
+	ctx.DrawRect(XYWH(-8, -24, 16, 48), Fill(RGBA(0.2, 0.55, 0.95, 0.75)))
+	ctx.Restore()
+}
+
+func sceneWrapShmPad(ctx *Context) {
+	const w, h, pad = 80, 48, 24
+	stride := w*4 + pad
+	buf := make([]byte, h*stride)
+	for i := range buf {
+		buf[i] = 0x4A
+	}
+	shm := WrapImage(buf, w, h, stride)
+	tmp := NewContext(shm)
+	tmp.Clear(RGB(0.10, 0.11, 0.14))
+	tmp.DrawRoundRect(XYWH(8, 8, 48, 20), 5, 5, Fill(RGB(0.23, 0.51, 0.93)))
+	tmp.DrawRoundRect(XYWH(8, 8, 48, 20), 5, 5, StrokePaint(RGB(0.45, 0.70, 1.0), 1.2))
+	tmp.DrawLabel("SHM", NewBitmapAtlas(White), Pt(18, 13), Paint{Color: White, Filter: FilterNearest})
+	tmp.DrawRoundRect(XYWH(64, 6, 10, 36), 4, 4, Fill(RGB(0.16, 0.17, 0.20)))
+	tmp.DrawRoundRect(XYWH(65, 14, 8, 14), 3, 3, Fill(RGB(0.48, 0.50, 0.58)))
+	ctx.DrawImageRectPaint(shm, XYWH(0, 0, float32(w), float32(h)), XYWH(0, 0, float32(w), float32(h)), Paint{Color: White, Filter: FilterNearest})
 }
 
 func sceneBlit(ctx *Context) {
