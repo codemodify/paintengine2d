@@ -25,8 +25,12 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.6.0
+go get github.com/codemodify/paintengine2d@v0.7.0
 ```
+
+**UI-foundation ready.** This module is the paint layer a separate UI
+kit and a separate WM/DE can start on. See the checklist and API
+stability notes below.
 
 **Not** a widget toolkit. **Not** a window manager. **Not** Gio.
 **Not** a Skia / Cairo binding. The UI framework and WM sit *on top*.
@@ -74,21 +78,21 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.6.0 | Notes |
+| Feature | v0.7.0 | Notes |
 | --- | :---: | --- |
-| Path + rect / round-rect / circle / curves | **done** | UI primitives |
+| Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
 | Solid fill, src-over | **done** | only blend mode |
 | Linear gradients | **done** | clamp / repeat / mirror |
 | Radial gradients | extra | present; not required for UI bar |
 | Stroke caps / joins / miter | **done** | width ≤ 0 is a no-op |
 | Dashes | extra | present; not required for UI bar |
-| Clip rect + clip path | **done** | intersect |
+| Clip rect + clip path | **done** | intersect; `ClipPathRule` for even-odd |
 | Image blit nearest + bilinear | **done** | |
 | Wrap existing pixmap (`WrapImage`) | **done** | packed or padded stride |
 | Dirty-rect `Damage` | **done** | widgets **and** decoration redraws |
 | Clip queries / `QuickReject` | **done** | framework skip-paint |
-| Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 bitmap atlas; no OpenType |
+| Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 atlas; `GlyphRun.Bounds`; no OpenType |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
 | GPU / SIMD / HDR / PDF | deferred | |
@@ -224,6 +228,8 @@ ctx.ClipRect(paintengine2d.XYWH(0, 0, 200, 120))
 if ctx.QuickReject(bounds) { /* skip */ }
 ctx.DrawPath(path, paintengine2d.Fill(c))
 ctx.DrawPath(path, paintengine2d.StrokePaint(c, 4))
+ctx.StrokeRect(r)
+ctx.DrawArc(center, rx, ry, start, sweep, paint)
 ctx.DrawImageRect(src, srcRect, dstRect)
 ctx.DrawGlyphs(run, origin, paint)
 ctx.Restore()
@@ -282,12 +288,13 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 | --- | --- | ---: | ---: |
 | `BenchmarkFillRect` | 512² | 0.15 ms | **0** |
 | `BenchmarkFillComplexPath` | 512² | 1.25 ms | 1 |
-| `BenchmarkStroke` | 512² blob | 2.14 ms | 7 (was 18) |
-| `BenchmarkManySmallPaths` | 16×16 circles | 52 ms | 262 (was ~1.8k) |
+| `BenchmarkStroke` | 512² blob | 2.03 ms | 7 |
+| `BenchmarkManySmallPaths` | 16×16 circles | 50 ms | 257 |
 | `BenchmarkFillCircleUI` | 64² / r=14 | 20 µs | 1 |
-| `BenchmarkStrokeRoundRectUI` | 128×48 | 52 µs | 7 |
-| `BenchmarkImageBlit` | 128→384 | 3.6 ms | **0** |
-| `BenchmarkDrawLabel` | 80×20 | 2.8 µs | 4 |
+| `BenchmarkStrokeRoundRectUI` | 128×48 | 51 µs | 7 |
+| `BenchmarkImageBlit` | 128→384 bilinear | 3.3 ms | **0** |
+| `BenchmarkImageBlitNearestUI` | 32→32 1:1 | 5.8 µs | **0** |
+| `BenchmarkDrawLabel` | 80×20 | 1.5 µs | 4 |
 
 `TestFillRectZeroAllocs` guards the opaque-rect hot path. `TestStrokeWarmPathBoundedAllocs`
 caps warm stroke allocs. Gradient/first-stroke allocs are still flatten-bound.
@@ -352,7 +359,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.6 (UI subset) |
+| Skia / typical canvas | paintengine2d v0.7 (UI foundation) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | `Device` hook only |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
@@ -368,6 +375,92 @@ An honest list — this is a CPU paint library, not Skia:
 
 If you need those, bind Skia or use a GPU UI toolkit. If you need a
 readable Go raster core you can own, this is the UI paint bar.
+
+## UI-foundation ready
+
+**UI-foundation ready** — start the separate UI kit (and WM/DE) on top
+of this module. Do not grow widgets or windowing here.
+
+| # | Requirement | Status |
+| --- | --- | :---: |
+| 1 | Primitives: paths (lines/quads/cubics), AA fill+stroke, rect/roundrect/ellipse/arc | **yes** |
+| 2 | Paint: solid, linear (+ radial), tile modes; caps/joins/miter; dashes correct | **yes** |
+| 3 | Canvas: save/restore, affine xforms, clip rect+path, Clear, FillRect, Fill/Stroke path | **yes** |
+| 4 | Images: DrawImage/DrawImageRect, nearest+bilinear, WrapImage/stride | **yes** |
+| 5 | Text hooks: FontAtlas / GlyphRun / Shaper + bitmap/atlas blit (HarfBuzz later) | **yes** |
+| 6 | Damage: dirty-rect coalescing + QuickReject / clip bounds | **yes** |
+| 7 | Correctness: unit + 28 goldens; fuzz without panic; `CGO_ENABLED=0` green | **yes** |
+| 8 | Perf: benches documented; opaque FillRect and 1:1 nearest blit are 0-alloc | **yes** |
+| 9 | Docs: layering, feature matrix, limitations, how to verify | **yes** |
+| 10 | API stability notes for a UI kit | **yes** (below) |
+
+### How to verify
+
+```bash
+CGO_ENABLED=0 go test ./...
+go test -bench . -benchmem
+go test -fuzz=FuzzRasterDraw -fuzztime=15s
+go test -fuzz=FuzzWrapImage -fuzztime=15s
+go run ./examples/hello -o hello.png
+```
+
+## API stability (what a UI kit can rely on)
+
+A forthcoming UI framework and WM/DE should treat these as the stable
+surface. Additive changes are fine; renaming or changing meaning is not.
+
+**Will not break without a major version**
+
+- [Context] canvas: `Save` / `Restore` / `SaveCount`, `Translate` / `Scale` /
+  `Rotate` / `SetMatrix` / `Transform`, `ClipRect` / `ClipPath` /
+  `ClipPathRule`, `Clear`, `FillRect` / `StrokeRect`, `FillPath` /
+  `StrokePath` / `DrawPath`, `DrawRect` / `DrawRoundRect` / `DrawOval` /
+  `DrawCircle` / `DrawArc` / `DrawLine`
+- Images: `DrawImage` / `DrawImageRect` / `DrawImageRectPaint`
+- Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`
+- [Device] + [CPUDevice] (GPU can implement `Device` later)
+- [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
+  stride; padding bytes are never written
+- [Path] verbs, `AddRect` / `AddRoundRect` / `AddEllipse` / `AddCircle` /
+  `AddArc`
+- [Paint]: solid color, [LinearGradient] / [RadialGradient], tile modes,
+  stroke caps/joins/miter, dashes, `FilterNearest` / `FilterBilinear`
+- [Damage] + `Context.SetDamage`: coalesce, `Overlaps`, `ClipTo`, `Bounds`
+- Text hooks: [FontAtlas], [AtlasCell], [GlyphRun], [Shaper], [NullShaper],
+  `DrawGlyphs`, `DrawLabel`, `GlyphRun.Bounds`
+- Pixel convention: +X right, +Y down; pixel `(0,0)` covers `[0,1]×[0,1]`
+- `Clear` ignores clip (reset-the-surface). Width ≤ 0 stroke is a no-op.
+- Non-finite path points and matrices are ignored (no panic).
+
+**May grow (additive)**
+
+- Extra [BlendMode] values (today only src-over; others are not faked)
+- A GPU [Device]
+- A HarfBuzz/OpenType [Shaper] in another module that satisfies the hook
+- More path helpers, more tile/filter modes
+
+**Will not appear in this repo**
+
+- Widgets, layout, IME, a11y, focus
+- X11 / Wayland / Win32 / swapchain creation
+- SaveLayer / offscreen filters, PDF, SVG playback, HDR
+
+**Contracts a retained UI layer should use**
+
+```go
+if !dirty.Overlaps(w.DeviceBounds) || ctx.QuickReject(w.LocalBounds) {
+    continue
+}
+ctx.Save()
+ctx.Translate(w.X, w.Y)
+ctx.ClipRect(w.LocalBounds)
+w.Paint(ctx)
+ctx.Restore()
+```
+
+`Damage.Add` merges overlapping and edge-touching boxes before collapsing
+to a union at `MaxRects`. Do not assume the N+1st dirty widget explodes
+the whole window.
 
 ## License
 
