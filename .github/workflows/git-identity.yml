@@ -1,0 +1,31 @@
+name: git-identity
+
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  authors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require only codemodify on every commit
+        run: |
+          set -euo pipefail
+          identity='codemodify <codemodify@linux.com>'
+          bad=$(git log --format='%h %an <%ae> %cn <%ce> %s' | grep -iE 'cursor|cursoragent|\[bot\]|agent@' || true)
+          if [ -n "$bad" ]; then
+            echo "agent/bot traces in history:"
+            echo "$bad"
+            exit 1
+          fi
+          while IFS= read -r line; do
+            if [ "$line" != "$identity" ]; then
+              echo "non-codemodify identity: $line"
+              git log --format='%h %an <%ae> %cn <%ce> %s'
+              exit 1
+            fi
+          done < <(git log --format='%an <%ae>' && git log --format='%cn <%ce>')
+          echo "all authors and committers are $identity"
