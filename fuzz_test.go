@@ -140,3 +140,84 @@ func FuzzClipAndImage(f *testing.F) {
 		ctx.Clear(Transparent) // must not panic even with empty clip leftover
 	})
 }
+
+func FuzzWrapImage(f *testing.F) {
+	f.Add(uint8(8), uint8(4), uint8(16), uint8(3), uint8(2))
+	f.Fuzz(func(t *testing.T, w8, h8, pad8, x8, y8 uint8) {
+		w := int(w8%24) + 1
+		h := int(h8%16) + 1
+		pad := int(pad8 % 32)
+		stride := w*4 + pad
+		buf := make([]byte, h*stride)
+		for i := range buf {
+			buf[i] = 0xA5
+		}
+		img := WrapImage(buf, w, h, stride)
+		if img == nil {
+			return
+		}
+		ctx := NewContext(img)
+		ctx.Clear(RGB(0.1, 0.2, 0.3))
+		ctx.DrawRect(XYWH(float32(x8%16), float32(y8%16), 6, 4), Fill(White))
+		ctx.DrawCircle(Pt(float32(w/2), float32(h/2)), 3, StrokePaint(Red, 1.5))
+		src := NewImage(3, 3)
+		src.Clear(Blue)
+		ctx.DrawImageRectPaint(src, XYWH(0, 0, 3, 3), XYWH(1, 1, 5, 5), Paint{Color: White, Filter: FilterNearest})
+		// Padding bytes must survive every paint.
+		for y := 0; y < h; y++ {
+			for i := w * 4; i < stride; i++ {
+				if buf[y*stride+i] != 0xA5 {
+					t.Fatalf("padding clobbered y=%d i=%d", y, i)
+				}
+			}
+		}
+		_ = img.Clone()
+		_ = img.SubImage(0, 0, w, h)
+	})
+}
+
+func FuzzDamage(f *testing.F) {
+	f.Add(int8(0), int8(0), int8(8), int8(8), int8(6), int8(2), uint8(4), uint8(1))
+	f.Fuzz(func(t *testing.T, x, y, w, h, x2, y2 int8, maxN, pad uint8) {
+		d := Damage{MaxRects: int(maxN % 12), Pad: float32(pad % 8)}
+		d.Add(XYWH(float32(x), float32(y), float32(w), float32(h)))
+		d.Add(XYWH(float32(x2), float32(y2), 3, 3))
+		d.Add(Rect{})
+		_ = d.Overlaps(XYWH(0, 0, 4, 4))
+		_ = d.Bounds()
+		d.ClipTo(XYWH(-20, -20, 80, 80))
+		if len(d.Rects) > 64 {
+			t.Fatalf("damage list exploded: %d", len(d.Rects))
+		}
+	})
+}
+
+func FuzzTextHooks(f *testing.F) {
+	f.Add("SAVE", int8(2), int8(2), uint8(1))
+	f.Add("Ok!", int8(-4), int8(3), uint8(0))
+	f.Fuzz(func(t *testing.T, text string, x, y int8, flags uint8) {
+		if len(text) > 32 {
+			text = text[:32]
+		}
+		atlas := NewBitmapAtlas(White)
+		img := NewImage(64, 24)
+		ctx := NewContext(img)
+		if flags&1 == 1 {
+			ctx.ClipRect(XYWH(4, 2, 40, 16))
+		}
+		if flags&2 == 2 {
+			ctx.Translate(float32(x), float32(y))
+			ctx.Rotate(0.15)
+		}
+		paint := Paint{Color: White, Filter: FilterNearest}
+		if flags&4 == 4 {
+			paint.Filter = FilterBilinear
+			paint.Color = White.WithAlpha(0.6)
+		}
+		run := NullShaper{}.Shape(text, atlas)
+		_ = run.Bounds(Pt(float32(x), float32(y)))
+		ctx.DrawGlyphs(run, Pt(float32(x), float32(y)), paint)
+		ctx.DrawLabel(text, atlas, Pt(1, 1), paint)
+		ctx.DrawLabel(text, nil, Pt(0, 0), paint)
+	})
+}
