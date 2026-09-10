@@ -1,0 +1,37 @@
+// Package paintengine2d is a from-scratch, pure-Go 2D paint / raster engine.
+//
+// It is a software canvas: you build paths, configure paints (solid color or
+// linear gradient, fill or stroke), and a CPU scanline anti-aliased backend
+// composites into a premultiplied RGBA pixmap. There is no CGO and no
+// dependency on Skia, Cairo, Blend2D, AGG, Gio, or NanoVG.
+//
+// # Quick start
+//
+//	img := paintengine2d.NewImage(640, 360)
+//	ctx := paintengine2d.NewContext(img)
+//	ctx.Clear(paintengine2d.RGB(0.12, 0.13, 0.16))
+//	ctx.DrawCircle(paintengine2d.Pt(180, 180), 90, paintengine2d.Fill(paintengine2d.RGB(0.2, 0.5, 0.95)))
+//	_ = img.WritePNGFile("out.png")
+//
+// # Coordinate space
+//
+// User space is a right-handed Cartesian plane with +X right and +Y down,
+// matching typical 2D canvas / Skia conventions. The current [Matrix] maps
+// user space to device pixels. Pixel (0, 0) is the top-left of the pixmap;
+// a rectangle covering the first pixel is [0, 1] × [0, 1].
+//
+// # Pixel format
+//
+// [Image] stores premultiplied 8-bit sRGB RGBA, tightly packed
+// (stride = width * 4). PNG encode/decode converts to and from straight
+// (non-premultiplied) alpha as expected by the standard library.
+//
+// # Backends
+//
+// [Context] is the public canvas (save/restore, transform, clip, draw).
+// Rasterization is delegated to a [Device]. v0 ships [CPUDevice]. A future
+// GPU device can implement the same interface without changing call sites.
+//
+// Text shaping, a retained scene graph, Evas-style dirty rectangles, SIMD,
+// and a GPU backend are intentionally out of scope for v0.
+package paintengine2d
