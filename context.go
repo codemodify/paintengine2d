@@ -72,16 +72,30 @@ func (c *Context) Restore() {
 func (s ctxState) clone() ctxState {
 	out := s
 	out.clip = s.clip.clone()
-	if g, ok := s.fill.Shader.(LinearGradient); ok {
-		out.fill.Shader = cloneLinear(g)
-	}
-	if g, ok := s.stroke.Shader.(LinearGradient); ok {
-		out.stroke.Shader = cloneLinear(g)
-	}
+	out.fill = clonePaint(s.fill)
+	out.stroke = clonePaint(s.stroke)
 	return out
 }
 
+func clonePaint(p Paint) Paint {
+	switch g := p.Shader.(type) {
+	case LinearGradient:
+		p.Shader = cloneLinear(g)
+	case RadialGradient:
+		p.Shader = cloneRadial(g)
+	}
+	if p.Stroke.Dash != nil {
+		p.Stroke.Dash = append([]float32(nil), p.Stroke.Dash...)
+	}
+	return p
+}
+
 func cloneLinear(g LinearGradient) LinearGradient {
+	g.Stops = append([]GradientStop(nil), g.Stops...)
+	return g
+}
+
+func cloneRadial(g RadialGradient) RadialGradient {
 	g.Stops = append([]GradientStop(nil), g.Stops...)
 	return g
 }

@@ -57,6 +57,35 @@ func BenchmarkManySmallPaths(b *testing.B) {
 	}
 }
 
+func BenchmarkGradientFill(b *testing.B) {
+	img := NewImage(512, 512)
+	ctx := NewContext(img)
+	p := Linear(LinearGradient{
+		Start: Pt(0, 0), End: Pt(512, 512),
+		Stops: []GradientStop{{0, RGB(0.2, 0.4, 0.9)}, {1, RGB(0.9, 0.3, 0.2)}},
+	})
+	path := blobPath()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawPath(path, p)
+	}
+}
+
+func BenchmarkImageBlit(b *testing.B) {
+	src := NewImage(128, 128)
+	src.Clear(RGB(0.4, 0.5, 0.8))
+	dst := NewImage(512, 512)
+	ctx := NewContext(dst)
+	sr := XYWH(0, 0, 128, 128)
+	dr := XYWH(64, 64, 384, 384)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawImageRect(src, sr, dr)
+	}
+}
+
 func blobPath() *Path {
 	p := NewPath()
 	p.MoveTo(80, 260)

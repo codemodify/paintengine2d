@@ -25,7 +25,8 @@ type Device interface {
 	Stroke(path *Path, xform Matrix, paint Paint, clip Clip)
 
 	// Blit draws src[srcRect] into dstRect (user space), then xform.
-	// paint.Color.A modulates the blit (1 = opaque). Shader is ignored in v0.
+	// paint.Color.A modulates the blit (zero-value paint = unmodulated).
+	// paint.Filter selects nearest or bilinear. Shader is ignored.
 	Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip)
 }
 

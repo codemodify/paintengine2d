@@ -59,13 +59,38 @@ const (
 	TileMirror
 )
 
+// FilterMode selects image resampling for [Context.DrawImageRect] / [Device.Blit].
+type FilterMode uint8
+
+const (
+	// FilterBilinear is the default: 2×2 weighted sample (smooth scale).
+	FilterBilinear FilterMode = iota
+	// FilterNearest picks the covering source pixel (blocky, exact for 1:1).
+	FilterNearest
+)
+
+// BlendMode is the Porter-Duff operator. v0.2 implements [BlendSrcOver] only;
+// any other value is treated as src-over. Extra modes are planned, not faked.
+type BlendMode uint8
+
+const (
+	// BlendSrcOver is the standard “source over destination” operator.
+	BlendSrcOver BlendMode = iota
+)
+
 // Stroke describes outline stroking. Width is in user-space units and
 // is transformed with the current matrix (Skia/SVG convention).
+//
+// Width <= 0 skips the stroke (no silent hairline). Dash is an SVG-style
+// on/off array in user units; a single value is paired with itself; an
+// empty or all-zero dash is a solid stroke. DashOffset shifts the pattern.
 type Stroke struct {
 	Width      float32
 	Cap        Cap
 	Join       Join
 	MiterLimit float32
+	Dash       []float32
+	DashOffset float32
 }
 
 // DefaultStroke is a 1px-wide butt/miter stroke (miter limit 4).
@@ -74,9 +99,6 @@ func DefaultStroke() Stroke {
 }
 
 func (s Stroke) normalized() Stroke {
-	if s.Width <= 0 {
-		s.Width = 1
-	}
 	if s.MiterLimit < 1 {
 		s.MiterLimit = 4
 	}
@@ -98,17 +120,33 @@ type LinearGradient struct {
 	Tile       TileMode
 }
 
+// RadialGradient is a circular gradient in user space. t = 0 at Center
+// (or at Inner, if Inner > 0) and t = 1 on the circle of radius Radius.
+// Tile modes match [LinearGradient]. A non-zero Focal shifts the t=0 point
+// (simple two-point radial; FocalRadius is reserved and ignored in v0.2).
+type RadialGradient struct {
+	Center Point
+	Radius float32
+	Inner  float32
+	Focal  Point
+	Stops  []GradientStop
+	Tile   TileMode
+}
+
 // Paint is the bundled drawing style passed to draw calls — the analogue of
 // Skia's SkPaint: color or shader, fill vs stroke, and fill rule.
 //
 // If Shader is non-nil it overrides Color. AntiAlias is reserved; the CPU
-// backend always anti-aliases path edges in v0 (there is no jaggy mode).
+// backend always anti-aliases path edges (there is no jaggy mode).
+// Filter applies to image blits. Blend is src-over unless documented later.
 type Paint struct {
 	Color     Color
 	Shader    Shader
 	Style     Style
 	Stroke    Stroke
 	FillRule  FillRule
+	Filter    FilterMode
+	Blend     BlendMode
 	AntiAlias bool
 }
 
@@ -138,6 +176,11 @@ func Linear(g LinearGradient) Paint {
 	return Paint{Shader: g, Style: StyleFill, AntiAlias: true, Stroke: DefaultStroke()}
 }
 
+// Radial returns a fill paint with a radial gradient shader.
+func Radial(g RadialGradient) Paint {
+	return Paint{Shader: g, Style: StyleFill, AntiAlias: true, Stroke: DefaultStroke()}
+}
+
 // Shade implements [Shader] for a solid color (rarely needed; set Paint.Color).
 func (c Color) Shade(x, y float32, xform Matrix) Color {
 	_, _, _ = x, y, xform
@@ -159,6 +202,41 @@ func (g LinearGradient) Shade(x, y float32, xform Matrix) Color {
 		t = 0
 	} else {
 		t = p.Sub(g.Start).Dot(d) / lenSq
+	}
+	t = tileParam(t, g.Tile)
+	return sampleStops(g.Stops, t)
+}
+
+// Shade implements [Shader] for [RadialGradient].
+func (g RadialGradient) Shade(x, y float32, xform Matrix) Color {
+	inv, ok := xform.Invert()
+	p := Point{x, y}
+	if ok {
+		p = inv.Transform(p)
+	}
+	origin := g.Center
+	if g.Focal != (Point{}) && (g.Focal.X != g.Center.X || g.Focal.Y != g.Center.Y) {
+		origin = g.Focal
+	}
+	r1 := g.Radius
+	if r1 < 0 {
+		r1 = -r1
+	}
+	r0 := g.Inner
+	if r0 < 0 {
+		r0 = -r0
+	}
+	d := p.Sub(origin).Len()
+	var t float32
+	span := r1 - r0
+	if span < 1e-8 {
+		if d <= r1 {
+			t = 0
+		} else {
+			t = 1
+		}
+	} else {
+		t = (d - r0) / span
 	}
 	t = tileParam(t, g.Tile)
 	return sampleStops(g.Stops, t)
@@ -188,34 +266,60 @@ func tileParam(t float32, mode TileMode) float32 {
 }
 
 func sampleStops(stops []GradientStop, t float32) Color {
-	if len(stops) == 0 {
+	n := len(stops)
+	if n == 0 {
 		return Transparent
 	}
-	if len(stops) == 1 {
+	if n == 1 {
 		return stops[0].Color
 	}
-	// Assume stops are sorted by Offset. We sort lazily at first use
-	// would require mutation; Context copies paints. Sort a tiny stack buf.
-	s0, s1 := stops[0], stops[len(stops)-1]
-	// Find bracketing stops.
-	if t <= stops[0].Offset {
-		return stops[0].Color
+	s := stops
+	// Hot path: already-sorted stops (the usual case) — no allocation.
+	sorted := true
+	for i := 1; i < n; i++ {
+		if s[i].Offset < s[i-1].Offset {
+			sorted = false
+			break
+		}
 	}
-	if t >= stops[len(stops)-1].Offset {
-		return stops[len(stops)-1].Color
+	if !sorted {
+		var stack [16]GradientStop
+		if n <= len(stack) {
+			copy(stack[:n], stops)
+			insertionSortStops(stack[:n])
+			s = stack[:n]
+		} else {
+			s = append([]GradientStop(nil), stops...)
+			insertionSortStops(s)
+		}
 	}
-	for i := 1; i < len(stops); i++ {
-		if t <= stops[i].Offset {
-			s0, s1 = stops[i-1], stops[i]
+	if t <= s[0].Offset {
+		return s[0].Color
+	}
+	if t >= s[n-1].Offset {
+		return s[n-1].Color
+	}
+	for i := 1; i < n; i++ {
+		if t <= s[i].Offset {
+			s0, s1 := s[i-1], s[i]
 			span := s1.Offset - s0.Offset
 			if span < 1e-8 {
 				return s1.Color
 			}
-			u := (t - s0.Offset) / span
-			return s0.Color.Lerp(s1.Color, u)
+			return s0.Color.Lerp(s1.Color, (t-s0.Offset)/span)
 		}
 	}
-	return s1.Color
+	return s[n-1].Color
+}
+
+func insertionSortStops(s []GradientStop) {
+	for i := 1; i < len(s); i++ {
+		j := i
+		for j > 0 && s[j].Offset < s[j-1].Offset {
+			s[j], s[j-1] = s[j-1], s[j]
+			j--
+		}
+	}
 }
 
 func mathFloor(v float32) int {
