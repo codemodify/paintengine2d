@@ -1,0 +1,21 @@
+# Build / test debris
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+cpu.prof
+mem.prof
+
+# Example render outputs (checked-in goldens live under testdata/)
+examples/**/*.png
+/hello.png
+/gallery.png
+/paths.png
+/out.png
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
