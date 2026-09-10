@@ -31,7 +31,7 @@ type seg struct {
 // outline contours suitable for non-zero fill.
 func ExpandStroke(contours [][]Vec2, closed []bool, opt StrokeOpts) [][]Vec2 {
 	if opt.Width <= 0 {
-		opt.Width = 1
+		return nil
 	}
 	if opt.MiterLimit < 1 {
 		opt.MiterLimit = 4

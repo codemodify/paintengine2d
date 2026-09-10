@@ -27,6 +27,9 @@ func TestGoldenImages(t *testing.T) {
 		{"clip_stack", sceneClipStack, 100, 100},
 		{"alpha_over", sceneAlphaOver, 80, 48},
 		{"thin_stroke", sceneThinStroke, 120, 40},
+		{"radial", sceneRadial, 96, 96},
+		{"dashes", sceneDashes, 200, 80},
+		{"image_filter", sceneImageFilter, 96, 48},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -209,6 +212,54 @@ func sceneThinStroke(ctx *Context) {
 		Style:  StyleStroke,
 		Stroke: Stroke{Width: 1.25, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
 	})
+}
+
+func sceneRadial(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.08, 0.1))
+	ctx.DrawCircle(Pt(48, 48), 40, Radial(RadialGradient{
+		Center: Pt(40, 40),
+		Radius: 48,
+		Stops: []GradientStop{
+			{Offset: 0, Color: RGB(1, 0.85, 0.35)},
+			{Offset: 0.55, Color: RGB(0.95, 0.35, 0.2)},
+			{Offset: 1, Color: RGB(0.15, 0.12, 0.35)},
+		},
+	}))
+}
+
+func sceneDashes(ctx *Context) {
+	ctx.Clear(RGB(0.08, 0.08, 0.1))
+	ctx.DrawLine(Pt(12, 18), Pt(188, 18), Paint{
+		Color: RGB(0.95, 0.8, 0.35),
+		Style: StyleStroke,
+		Stroke: Stroke{Width: 6, Cap: CapButt, Join: JoinMiter, MiterLimit: 4,
+			Dash: []float32{14, 8}},
+	})
+	p := NewPath()
+	p.MoveTo(16, 60)
+	p.CubicTo(70, 20, 130, 90, 184, 50)
+	ctx.DrawPath(p, Paint{
+		Color: RGB(0.4, 0.85, 1),
+		Style: StyleStroke,
+		Stroke: Stroke{Width: 4, Cap: CapRound, Join: JoinRound, MiterLimit: 4,
+			Dash: []float32{10, 6, 2, 6}},
+	})
+}
+
+func sceneImageFilter(ctx *Context) {
+	ctx.Clear(Gray(0.12))
+	src := NewImage(4, 4)
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			if (x+y)&1 == 0 {
+				src.SetColor(x, y, RGB(0.95, 0.3, 0.25))
+			} else {
+				src.SetColor(x, y, RGB(0.2, 0.45, 0.95))
+			}
+		}
+	}
+	ctx.DrawImageRectPaint(src, XYWH(0, 0, 4, 4), XYWH(8, 8, 36, 32), Paint{Color: White, Filter: FilterNearest})
+	ctx.DrawImageRectPaint(src, XYWH(0, 0, 4, 4), XYWH(52, 8, 36, 32), Paint{Color: White, Filter: FilterBilinear})
 }
 
 func sceneBlit(ctx *Context) {
