@@ -61,12 +61,18 @@ func (d *CPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 		return
 	}
 	st := paint.Stroke.normalized()
+	if st.Width <= 0 {
+		return
+	}
 	// Expand in user space, then transform the outline (stroke width follows
 	// the current matrix, matching Skia / SVG).
 	d.packPath(path)
 	var userContours [][]raster.Vec2
 	var userClosed []bool
 	raster.Flatten(d.verbs, d.pts, flattenTol(), &userContours, &userClosed)
+	if len(st.Dash) > 0 {
+		userContours, userClosed = raster.Dash(userContours, userClosed, st.Dash, st.DashOffset)
+	}
 	opt := raster.StrokeOpts{
 		Width:      st.Width,
 		Cap:        int(st.Cap),
@@ -149,7 +155,12 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 			if tx < srcRect.Min.X || tx >= srcRect.Max.X || ty < srcRect.Min.Y || ty >= srcRect.Max.Y {
 				continue
 			}
-			sr, sg, sb, sa := raster.SampleBilinearPremul(src.Pix, src.Width, src.Height, tx-0.5, ty-0.5)
+			var sr, sg, sb, sa uint8
+			if paint.Filter == FilterNearest {
+				sr, sg, sb, sa = raster.SampleNearestPremul(src.Pix, src.Width, src.Height, tx, ty)
+			} else {
+				sr, sg, sb, sa = raster.SampleBilinearPremul(src.Pix, src.Width, src.Height, tx-0.5, ty-0.5)
+			}
 			if sa == 0 {
 				continue
 			}

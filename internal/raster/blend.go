@@ -75,6 +75,15 @@ func SampleBilinearPremul(pix []byte, w, h int, x, y float32) (r, g, b, a uint8)
 	return uint8(sr + 0.5), uint8(sg + 0.5), uint8(sb + 0.5), uint8(sa + 0.5)
 }
 
+// SampleNearestPremul returns the premul pixel covering (x, y) in pixel
+// space (pixel i covers [i, i+1)). Outside is transparent.
+func SampleNearestPremul(pix []byte, w, h int, x, y float32) (r, g, b, a uint8) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	return pixelAt(pix, w, h, mathFloor32(x), mathFloor32(y))
+}
+
 func pixelAt(pix []byte, w, h, x, y int) (r, g, b, a uint8) {
 	if x < 0 || y < 0 || x >= w || y >= h {
 		return
