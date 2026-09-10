@@ -10,6 +10,7 @@ type Context struct {
 	stack   []ctxState
 	cur     ctxState
 	scratch *Path // reused by DrawRect / DrawCircle / …
+	damage  *Damage
 }
 
 type ctxState struct {
@@ -152,7 +153,10 @@ func (c *Context) SetStrokeStyle(cap Cap, join Join, miterLimit float32) {
 }
 
 // Clear fills the entire device, ignoring clip (reset-the-surface).
-func (c *Context) Clear(col Color) { c.dev.Clear(col) }
+func (c *Context) Clear(col Color) {
+	c.dev.Clear(col)
+	c.markDirtyDevice()
+}
 
 // ClipRect intersects the clip with r in user space. If the current matrix
 // keeps the rect axis-aligned, this is a scissor; otherwise it is a clip path.
@@ -270,6 +274,32 @@ func (c *Context) tightenScissorFromMask() {
 
 func (c *Context) clip() Clip { return c.cur.clip.export() }
 
+// SetDamage attaches a dirty-rect tracker. Draw calls record device-space
+// bounds; the UI layer presents [Damage.Rects] or [Damage.Bounds].
+func (c *Context) SetDamage(d *Damage) { c.damage = d }
+
+// Damage returns the tracker set by [Context.SetDamage], or nil.
+func (c *Context) Damage() *Damage { return c.damage }
+
+func (c *Context) markDirtyUser(r Rect) {
+	if c.damage == nil || r.Empty() {
+		return
+	}
+	dev := c.cur.xform.TransformRect(r)
+	if c.cur.clip.hasScissor {
+		dev = dev.Intersect(c.cur.clip.scissor)
+	}
+	c.damage.Add(dev)
+}
+
+func (c *Context) markDirtyDevice() {
+	if c.damage == nil {
+		return
+	}
+	w, h := c.dev.Size()
+	c.damage.Add(XYWH(0, 0, float32(w), float32(h)))
+}
+
 // DrawPath fills and/or strokes path according to paint.Style.
 func (c *Context) DrawPath(path *Path, paint Paint) {
 	if path == nil || path.Empty() {
@@ -286,6 +316,11 @@ func (c *Context) DrawPath(path *Path, paint Paint) {
 	default:
 		c.dev.Fill(path, c.cur.xform, paint, c.clip())
 	}
+	b := path.Bounds()
+	if paint.Style != StyleFill && paint.Stroke.Width > 0 {
+		b = b.Inset(-paint.Stroke.Width)
+	}
+	c.markDirtyUser(b)
 }
 
 // FillPath fills path with the convenience fill paint.
@@ -351,6 +386,7 @@ func (c *Context) DrawImageRect(img *Image, src, dst Rect) {
 		return
 	}
 	c.dev.Blit(img, src, dst, c.cur.xform, Paint{Color: White}, c.clip())
+	c.markDirtyUser(dst)
 }
 
 // DrawImageRectPaint is [Context.DrawImageRect] with an alpha modulator
@@ -360,4 +396,5 @@ func (c *Context) DrawImageRectPaint(img *Image, src, dst Rect, paint Paint) {
 		return
 	}
 	c.dev.Blit(img, src, dst, c.cur.xform, paint, c.clip())
+	c.markDirtyUser(dst)
 }
