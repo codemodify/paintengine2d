@@ -46,3 +46,28 @@ func TestCoverageRowEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestCoverageRowSharedVertex(t *testing.T) {
+	// Closed unit square: vertices meet exactly on sample lines.
+	edges := BuildEdges([][]Vec2{
+		{{1, 1}, {5, 1}, {5, 5}, {1, 5}, {1, 1}},
+	}, nil)
+	var r Rasterizer
+	r.ResetEdges(edges)
+	c := r.CoverageRow(3, 8, FillNonZero, 0, 8)
+	if c[3] < 250 {
+		t.Fatalf("interior coverage %d", c[3])
+	}
+	if c[0] != 0 || c[7] != 0 {
+		t.Fatalf("outside %v", c)
+	}
+}
+
+func TestMergeIsectsCombinesDirs(t *testing.T) {
+	in := []isect{{x: 1, dir: 1}, {x: 1, dir: -1}, {x: 4, dir: 1}}
+	sortIsects(in)
+	out := mergeIsects(in)
+	if len(out) != 1 || out[0].x != 4 {
+		t.Fatalf("zero-dir pair should drop, got %+v", out)
+	}
+}

@@ -30,6 +30,11 @@ func (p Vec2) norm() Vec2 {
 
 func (p Vec2) perp() Vec2 { return Vec2{-p.Y, p.X} }
 
+func (p Vec2) finite() bool {
+	return !math.IsNaN(float64(p.X)) && !math.IsInf(float64(p.X), 0) &&
+		!math.IsNaN(float64(p.Y)) && !math.IsInf(float64(p.Y), 0)
+}
+
 func abs32(v float32) float32 {
 	if v < 0 {
 		return -v

@@ -27,3 +27,19 @@ func TestFlattenCubicIncreasesPoints(t *testing.T) {
 		t.Fatalf("expected subdivided cubic, got %+v", contours)
 	}
 }
+
+func TestFlattenReusesContourBacking(t *testing.T) {
+	verbs := []Verb{Move, Line, Line, Close}
+	pts := []Vec2{{0, 0}, {8, 0}, {8, 6}}
+	var contours [][]Vec2
+	var closed []bool
+	Flatten(verbs, pts, 0.2, &contours, &closed)
+	if len(contours) != 1 {
+		t.Fatal(len(contours))
+	}
+	ptr := &contours[0][0]
+	Flatten(verbs, pts, 0.2, &contours, &closed)
+	if &contours[0][0] != ptr {
+		t.Fatal("expected contour slice reuse on the second flatten")
+	}
+}

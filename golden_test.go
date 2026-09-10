@@ -31,6 +31,10 @@ func TestGoldenImages(t *testing.T) {
 		{"dashes", sceneDashes, 200, 80},
 		{"image_filter", sceneImageFilter, 96, 48},
 		{"ui_label", sceneUILabel, 120, 48},
+		{"roundrect_ui", sceneRoundRectUI, 140, 64},
+		{"stroke_scaled", sceneStrokeScaled, 96, 96},
+		{"diagonal_aa", sceneDiagonalAA, 80, 80},
+		{"glyph_clip", sceneGlyphClip, 80, 32},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -267,6 +271,45 @@ func sceneUILabel(ctx *Context) {
 	ctx.Clear(RGB(0.10, 0.11, 0.14))
 	ctx.DrawRoundRect(XYWH(8, 10, 104, 28), 6, 6, Fill(RGB(0.23, 0.51, 0.93)))
 	ctx.DrawLabel("SAVE", NewBitmapAtlas(White), Pt(34, 16), Paint{Color: White, Filter: FilterNearest})
+}
+
+func sceneRoundRectUI(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRoundRect(XYWH(8, 8, 52, 48), 10, 10, Fill(RGB(0.22, 0.48, 0.90)))
+	ctx.DrawRoundRect(XYWH(8, 8, 52, 48), 10, 10, StrokePaint(White, 2))
+	ctx.DrawRoundRect(XYWH(72, 12, 56, 20), 4, 4, Fill(RGB(0.18, 0.72, 0.42)))
+	ctx.DrawRoundRect(XYWH(72, 36, 56, 16), 8, 8, Paint{
+		Color:  RGB(0.95, 0.35, 0.28),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 3, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+}
+
+func sceneStrokeScaled(ctx *Context) {
+	ctx.Clear(Gray(0.12))
+	ctx.Save()
+	ctx.Translate(16, 16)
+	ctx.Scale(3, 3)
+	ctx.DrawCircle(Pt(10, 10), 7, StrokePaint(RGB(0.95, 0.85, 0.35), 1.1))
+	ctx.Restore()
+	ctx.DrawCircle(Pt(72, 48), 18, StrokePaint(RGB(0.4, 0.75, 1), 3))
+}
+
+func sceneDiagonalAA(ctx *Context) {
+	ctx.Clear(Gray(0.10))
+	ctx.DrawLine(Pt(6, 6), Pt(74, 74), StrokePaint(White, 1.25))
+	ctx.DrawLine(Pt(8, 70), Pt(72, 10), Paint{
+		Color:  RGB(0.3, 0.75, 0.95),
+		Style:  StyleStroke,
+		Stroke: Stroke{Width: 2, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+}
+
+func sceneGlyphClip(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.ClipRect(XYWH(6, 4, 40, 24))
+	ctx.DrawRoundRect(XYWH(4, 2, 72, 28), 4, 4, Fill(RGB(0.20, 0.32, 0.48)))
+	ctx.DrawLabel("CLIPPED", NewBitmapAtlas(White), Pt(8, 10), Paint{Color: White, Filter: FilterNearest})
 }
 
 func sceneBlit(ctx *Context) {

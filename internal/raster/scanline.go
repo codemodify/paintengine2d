@@ -19,11 +19,15 @@ type Edge struct {
 
 func (e Edge) xAt(y float32) float32 {
 	dy := e.Y1 - e.Y0
-	if dy == 0 {
+	if abs32(dy) < 1e-20 {
 		return e.X0
 	}
 	t := (y - e.Y0) / dy
-	return e.X0 + t*(e.X1-e.X0)
+	x := e.X0 + t*(e.X1-e.X0)
+	if x != x { // NaN
+		return e.X0
+	}
+	return x
 }
 
 // BuildEdges converts flattened contours into directed edges.
@@ -35,7 +39,7 @@ func BuildEdges(contours [][]Vec2, dst []Edge) []Edge {
 		}
 		for i := 1; i < len(c); i++ {
 			a, b := c[i-1], c[i]
-			if a.Y == b.Y {
+			if !a.finite() || !b.finite() || a.Y == b.Y {
 				continue
 			}
 			dir := int8(1)
@@ -118,6 +122,10 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 			continue
 		}
 		sortIsects(r.isects)
+		r.isects = mergeIsects(r.isects)
+		if len(r.isects) < 2 {
+			continue
+		}
 		winding := 0
 		for i := 0; i < len(r.isects)-1; i++ {
 			winding += int(r.isects[i].dir)
@@ -152,6 +160,34 @@ func sortIsects(a []isect) {
 		}
 		a[j] = x
 	}
+}
+
+// mergeIsects collapses intersections that share an X (shared vertices)
+// so winding changes once and zero-length spans are skipped.
+func mergeIsects(a []isect) []isect {
+	if len(a) < 2 {
+		return a
+	}
+	const eps = 1e-5
+	n := 0
+	for i := 0; i < len(a); i++ {
+		if n > 0 && abs32(a[i].x-a[n-1].x) < eps {
+			a[n-1].dir += a[i].dir
+			continue
+		}
+		a[n] = a[i]
+		n++
+	}
+	out := a[:n]
+	w := 0
+	for i := range out {
+		if out[i].dir == 0 {
+			continue
+		}
+		out[w] = out[i]
+		w++
+	}
+	return out[:w]
 }
 
 func filled(winding, rule int) bool {
