@@ -188,3 +188,14 @@ func clamp32(v, lo, hi float32) float32 {
 	}
 	return v
 }
+
+// Finite reports whether x is a finite number (not NaN or ±Inf).
+func finite32(x float32) bool {
+	return !math.IsNaN(float64(x)) && !math.IsInf(float64(x), 0)
+}
+
+// Finite reports whether both coordinates are finite.
+func (p Point) Finite() bool { return finite32(p.X) && finite32(p.Y) }
+
+// Finite reports whether all corners are finite.
+func (r Rect) Finite() bool { return r.Min.Finite() && r.Max.Finite() }

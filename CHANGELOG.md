@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.4.0 — 2026-09-10
+
+UI-engine quality bar: correctness, AA, alloc tightness, denser regression.
+
+### Changed
+
+- Stroke flattening uses a device-pixel tolerance (`0.2 / ApproxScale`)
+- Scanline intersections at a shared X merge winding (vertex-safe)
+- Round caps/joins tessellate from radius (chord ~0.35 px)
+- `ClipPath` rasterizes only the path's device bounds
+- Flatten and stroke-outline slices are reused across draws
+- Non-finite path points and matrices are ignored (no panic)
+
+### Added
+
+- Goldens: `roundrect_ui`, `stroke_scaled`, `diagonal_aa`, `glyph_clip`
+- Robustness suite (NaN, bowtie, scaled stroke, nested path clip)
+- `FuzzCoverageRow`; UI-sized benches (circle, round-rect stroke, label, clip)
+- Godoc Skia/JUCE mapping and performance contracts
+
 ## 0.3.0 — 2026-09-10
 
 UI-subset production bar: dirty-rect helper and text hooks.

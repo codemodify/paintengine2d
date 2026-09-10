@@ -11,6 +11,8 @@ type Context struct {
 	cur     ctxState
 	scratch *Path // reused by DrawRect / DrawCircle / …
 	damage  *Damage
+	// clipScratch is a reusable pixmap for ClipPath coverage.
+	clipScratch *Image
 }
 
 type ctxState struct {
@@ -104,11 +106,20 @@ func cloneRadial(g RadialGradient) RadialGradient {
 // Matrix returns the current user → device transform.
 func (c *Context) Matrix() Matrix { return c.cur.xform }
 
-// SetMatrix replaces the current transform.
-func (c *Context) SetMatrix(m Matrix) { c.cur.xform = m }
+// SetMatrix replaces the current transform. Non-finite matrices are ignored.
+func (c *Context) SetMatrix(m Matrix) {
+	if m.Finite() {
+		c.cur.xform = m
+	}
+}
 
 // Transform post-multiplies m (apply m in user space, then the current xform).
-func (c *Context) Transform(m Matrix) { c.cur.xform = c.cur.xform.Mul(m) }
+// Non-finite matrices are ignored.
+func (c *Context) Transform(m Matrix) {
+	if m.Finite() {
+		c.cur.xform = c.cur.xform.Mul(m)
+	}
+}
 
 // Translate shifts user space.
 func (c *Context) Translate(x, y float32) { c.Transform(Translation(x, y)) }
@@ -195,40 +206,72 @@ func (c *Context) rectScratch(r Rect) *Path {
 }
 
 // ClipPath intersects the clip with path (filled, current fill rule / transform).
+// Coverage is rasterized only over the path's device-space bounds (typical UI
+// clips are small rounded rects, not the full window).
 func (c *Context) ClipPath(path *Path) {
-	if path == nil || path.Empty() {
+	if path == nil || path.Empty() || !c.cur.xform.Finite() {
 		c.cur.clip.scissor = Rect{}
 		c.cur.clip.hasScissor = true
 		return
 	}
 	w, h := c.dev.Size()
-	// Rasterize coverage into a temporary CPU image, then AND with the mask.
-	maskImg := NewImage(w, h)
+	canvas := XYWH(0, 0, float32(w), float32(h))
+	box := c.cur.xform.TransformRect(path.Bounds()).Inset(-2)
+	if c.cur.clip.hasScissor {
+		box = box.Intersect(c.cur.clip.scissor)
+	}
+	box = box.Intersect(canvas)
+	if box.Empty() {
+		c.cur.clip.scissor = Rect{}
+		c.cur.clip.hasScissor = true
+		c.cur.clip.mask = nil
+		return
+	}
+	x0, y0, x1, y1 := clampPixelBounds(box, w, h)
+	if x0 >= x1 || y0 >= y1 {
+		c.cur.clip.scissor = Rect{}
+		c.cur.clip.hasScissor = true
+		c.cur.clip.mask = nil
+		return
+	}
+	bw, bh := x1-x0, y1-y0
+	maskImg := c.ensureClipScratch(bw, bh)
 	tmp := NewCPUDevice(maskImg)
-	tmp.Fill(path, c.cur.xform, Fill(White), c.cur.clip.export())
-	// Convert premul RGB (white * coverage) to A8. White premul means A is coverage.
-	newMask := make([]byte, w*h)
-	for i := 0; i < w*h; i++ {
+	shifted := Translation(-float32(x0), -float32(y0)).Mul(c.cur.xform)
+	clip := c.cur.clip.export()
+	if clip.HasScissor {
+		clip.Scissor = clip.Scissor.Translate(Pt(-float32(x0), -float32(y0)))
+	}
+	if clip.Mask != nil {
+		clip.MaskX -= x0
+		clip.MaskY -= y0
+	}
+	tmp.Clear(Transparent)
+	tmp.Fill(path, shifted, Fill(White), clip)
+	newMask := make([]byte, bw*bh)
+	for i := 0; i < bw*bh; i++ {
 		newMask[i] = maskImg.Pix[i*4+3]
 	}
-	if c.cur.clip.mask == nil {
-		c.cur.clip.mask = newMask
-		c.cur.clip.maskX, c.cur.clip.maskY = 0, 0
-		c.cur.clip.maskW, c.cur.clip.maskH = w, h
-	} else {
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				a := newMask[y*w+x]
-				b := c.cur.clip.export().maskAt(x, y)
-				newMask[y*w+x] = uint8(uint16(a) * uint16(b) / 255)
+	if c.cur.clip.mask != nil {
+		prev := c.cur.clip.export()
+		for y := 0; y < bh; y++ {
+			for x := 0; x < bw; x++ {
+				b := prev.maskAt(x0+x, y0+y)
+				newMask[y*bw+x] = uint8(uint16(newMask[y*bw+x]) * uint16(b) / 255)
 			}
 		}
-		c.cur.clip.mask = newMask
-		c.cur.clip.maskX, c.cur.clip.maskY = 0, 0
-		c.cur.clip.maskW, c.cur.clip.maskH = w, h
 	}
-	// Tighten scissor to the mask's non-zero bounds when cheap enough.
+	c.cur.clip.mask = newMask
+	c.cur.clip.maskX, c.cur.clip.maskY = x0, y0
+	c.cur.clip.maskW, c.cur.clip.maskH = bw, bh
 	c.tightenScissorFromMask()
+}
+
+func (c *Context) ensureClipScratch(w, h int) *Image {
+	if c.clipScratch == nil || c.clipScratch.Width != w || c.clipScratch.Height != h {
+		c.clipScratch = NewImage(w, h)
+	}
+	return c.clipScratch
 }
 
 func (c *Context) tightenScissorFromMask() {
@@ -282,7 +325,7 @@ func (c *Context) SetDamage(d *Damage) { c.damage = d }
 func (c *Context) Damage() *Damage { return c.damage }
 
 func (c *Context) markDirtyUser(r Rect) {
-	if c.damage == nil || r.Empty() {
+	if c.damage == nil || r.Empty() || !r.Finite() || !c.cur.xform.Finite() {
 		return
 	}
 	dev := c.cur.xform.TransformRect(r)
@@ -318,7 +361,13 @@ func (c *Context) DrawPath(path *Path, paint Paint) {
 	}
 	b := path.Bounds()
 	if paint.Style != StyleFill && paint.Stroke.Width > 0 {
-		b = b.Inset(-paint.Stroke.Width)
+		pad := paint.Stroke.Width
+		if paint.Stroke.Join == JoinMiter && paint.Stroke.MiterLimit > 1 {
+			if m := paint.Stroke.Width * paint.Stroke.MiterLimit * 0.5; m > pad {
+				pad = m
+			}
+		}
+		b = b.Inset(-pad)
 	}
 	c.markDirtyUser(b)
 }

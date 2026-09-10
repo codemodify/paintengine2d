@@ -68,8 +68,11 @@ func (p *Path) Verbs() []Verb { return p.verbs }
 // Points returns the packed point stream. The slice must not be mutated.
 func (p *Path) Points() []Point { return p.pts }
 
-// MoveTo begins a new contour at (x, y).
+// MoveTo begins a new contour at (x, y). Non-finite coordinates are ignored.
 func (p *Path) MoveTo(x, y float32) {
+	if !finite32(x) || !finite32(y) {
+		return
+	}
 	p.verbs = append(p.verbs, VerbMove)
 	p.pts = append(p.pts, Point{x, y})
 	p.start = Point{x, y}
@@ -78,8 +81,11 @@ func (p *Path) MoveTo(x, y float32) {
 }
 
 // LineTo adds a straight line to (x, y). If there is no current point,
-// this is equivalent to MoveTo.
+// this is equivalent to MoveTo. Non-finite coordinates are ignored.
 func (p *Path) LineTo(x, y float32) {
+	if !finite32(x) || !finite32(y) {
+		return
+	}
 	if !p.hasCurrent {
 		p.MoveTo(x, y)
 		return
@@ -88,8 +94,11 @@ func (p *Path) LineTo(x, y float32) {
 	p.pts = append(p.pts, Point{x, y})
 }
 
-// QuadTo adds a quadratic Bézier (control, end).
+// QuadTo adds a quadratic Bézier (control, end). Non-finite coordinates are ignored.
 func (p *Path) QuadTo(cx, cy, x, y float32) {
+	if !finite32(cx) || !finite32(cy) || !finite32(x) || !finite32(y) {
+		return
+	}
 	if !p.hasCurrent {
 		p.MoveTo(cx, cy)
 	}
@@ -97,8 +106,11 @@ func (p *Path) QuadTo(cx, cy, x, y float32) {
 	p.pts = append(p.pts, Point{cx, cy}, Point{x, y})
 }
 
-// CubicTo adds a cubic Bézier (c1, c2, end).
+// CubicTo adds a cubic Bézier (c1, c2, end). Non-finite coordinates are ignored.
 func (p *Path) CubicTo(c1x, c1y, c2x, c2y, x, y float32) {
+	if !finite32(c1x) || !finite32(c1y) || !finite32(c2x) || !finite32(c2y) || !finite32(x) || !finite32(y) {
+		return
+	}
 	if !p.hasCurrent {
 		p.MoveTo(c1x, c1y)
 	}

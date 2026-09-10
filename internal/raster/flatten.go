@@ -20,10 +20,23 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 	if tol < 0.01 {
 		tol = 0.01
 	}
+	if tol > 8 {
+		tol = 8
+	}
+	old := *contours
 	*contours = (*contours)[:0]
 	*closed = (*closed)[:0]
+	poolI := 0
+	take := func() []Vec2 {
+		if poolI < len(old) {
+			c := old[poolI][:0]
+			poolI++
+			return c
+		}
+		return make([]Vec2, 0, 16)
+	}
 
-	var cur []Vec2
+	cur := take()
 	var start Vec2
 	var hasStart, hasCur bool
 	pi := 0
@@ -35,8 +48,10 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			}
 			*contours = append(*contours, cur)
 			*closed = append(*closed, isClosed)
+			cur = take()
+		} else {
+			cur = cur[:0]
 		}
-		cur = nil
 		hasStart, hasCur = false, false
 	}
 
@@ -46,11 +61,17 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			flush(false)
 			p := pts[pi]
 			pi++
+			if !p.finite() {
+				continue
+			}
 			start, hasStart, hasCur = p, true, true
 			cur = append(cur, p)
 		case Line:
 			p := pts[pi]
 			pi++
+			if !p.finite() {
+				continue
+			}
 			if !hasCur {
 				start, hasStart, hasCur = p, true, true
 				cur = append(cur, p)
@@ -61,6 +82,9 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			c := pts[pi]
 			p := pts[pi+1]
 			pi += 2
+			if !c.finite() || !p.finite() {
+				continue
+			}
 			if !hasCur {
 				start, hasStart, hasCur = c, true, true
 				cur = append(cur, c)
@@ -72,6 +96,9 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			c2 := pts[pi+1]
 			p := pts[pi+2]
 			pi += 3
+			if !c1.finite() || !c2.finite() || !p.finite() {
+				continue
+			}
 			if !hasCur {
 				start, hasStart, hasCur = c1, true, true
 				cur = append(cur, c1)
@@ -98,7 +125,7 @@ func (p Vec2) near(q Vec2, eps float32) bool {
 }
 
 func flattenQuad(out []Vec2, p0, p1, p2 Vec2, tol float32, depth int) []Vec2 {
-	if depth > 16 || distPointToLine(p1, p0, p2) <= tol {
+	if depth > 24 || distPointToLine(p1, p0, p2) <= tol {
 		return append(out, p2)
 	}
 	// de Casteljau
@@ -113,7 +140,7 @@ func flattenQuad(out []Vec2, p0, p1, p2 Vec2, tol float32, depth int) []Vec2 {
 func flattenCubic(out []Vec2, p0, p1, p2, p3 Vec2, tol float32, depth int) []Vec2 {
 	d1 := distPointToLine(p1, p0, p3)
 	d2 := distPointToLine(p2, p0, p3)
-	if depth > 16 || d1+d2 <= tol {
+	if depth > 24 || d1+d2 <= tol {
 		return append(out, p3)
 	}
 	p01 := p0.add(p1).mul(0.5)

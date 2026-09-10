@@ -1,8 +1,11 @@
 # paintengine2d
 
-A from-scratch **pure Go 2D paint / raster engine** aimed at **UI primitives**
-— widgets, panels, icons, and labels — not Skia feature parity and not a
-widget toolkit. Anti-aliased fill/stroke, no CGO, own rasterizer.
+The **pure-Go UI paint engine**: a from-scratch CPU canvas for widgets,
+panels, icons, and labels. Best-in-class for *Go UI painting* — not a
+Skia clone, not a widget toolkit, no CGO.
+
+Anti-aliased fill/stroke, clip, gradients, image blit, dirty-rects, and
+text hooks. Frameworks sit on top.
 
 ```go
 img := paintengine2d.NewImage(640, 360)
@@ -13,7 +16,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.3.0
+go get github.com/codemodify/paintengine2d@v0.4.0
 ```
 
 **Not** a widget toolkit (no layout, input, IME, or a11y). **Not** Gio.
@@ -29,7 +32,8 @@ go get github.com/codemodify/paintengine2d@v0.3.0
 ## Motivation
 
 Go's standard library can encode images, but it does not ship a paint engine.
-**paintengine2d** is a small CPU canvas for UI-shaped drawing: rects, curves,
+If you want a **default-choice Go canvas** for UI chrome — without linking
+Skia/Cairo or taking Gio's whole toolkit — this is that layer: rects, curves,
 clips, images, dirty-rects, and a text *hook* (glyph atlas blit). A GPU
 `Device` can be added later without changing call sites.
 
@@ -60,7 +64,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.3.0 | Notes |
+| Feature | v0.4.0 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / circle / curves | **done** | UI primitives |
 | Affine transforms + save/restore | **done** | |
@@ -175,30 +179,36 @@ go test -fuzz=FuzzRasterDraw -fuzztime=15s
 go test -fuzz=FuzzClipAndImage -fuzztime=15s
 ```
 
-Goldens compare premul RGBA with a small per-channel tolerance (18 scenes).
+Goldens compare premul RGBA with a small per-channel tolerance (22 scenes).
 Quality tests also assert geometry without files (circle AA rim, winding
-holes, dash gaps, nearest vs bilinear).
+holes, dash gaps, nearest vs bilinear, NaN/degenerate, scaled strokes).
 
 The suite is inspired by public AGG / Blend2D / Skia / Cairo / NanoVG /
 JUCE / LibGfx / Gio *themes* (save stacks, clip intersection, dashes,
 patterns, degenerate geometry). No upstream source or copyrighted goldens
 are vendored — scenarios are reimplemented here.
 
-Representative numbers on this repo's CI-like host (Go 1.22, linux/amd64,
-512×512 target, `benchtime=300ms`). Treat them as a baseline, not a promise:
+### Bench methodology
 
-| Benchmark | time/op | allocs/op |
-| --- | ---: | ---: |
-| `BenchmarkFillRect` | ~0.18 ms | 0 |
-| `BenchmarkFillComplexPath` | ~1.2 ms | 9 |
-| `BenchmarkStroke` | ~2.2 ms | 18 |
-| `BenchmarkManySmallPaths` (16×16 circles) | ~50 ms | ~1.8k |
-| `BenchmarkGradientFill` | ~3.9 ms | 9 |
-| `BenchmarkImageBlit` | ~3.5 ms | 0 |
+Numbers below are from `CGO_ENABLED=0 go test -bench . -benchmem` on this
+repo's CI-like host (Go 1.22, linux/amd64). Large targets are 512×512;
+UI benches use widget sizes (64–256 px). `benchtime` default. This is a
+**baseline for this engine**, not a claim of Blend2D/Skia parity and not
+a Gio CPU bake-off on their scenes. Re-run on your machine.
 
-`TestFillRectZeroAllocs` guards the opaque-rect hot path. A jump from 0 to
-dozens of allocs on `FillRect` is a regression; gradient/stroke allocs are
-still flatten-bound.
+| Benchmark | size | time/op | allocs/op |
+| --- | --- | ---: | ---: |
+| `BenchmarkFillRect` | 512² | 0.15 ms | **0** |
+| `BenchmarkFillComplexPath` | 512² | 1.25 ms | 1 |
+| `BenchmarkStroke` | 512² blob | 2.14 ms | 7 (was 18) |
+| `BenchmarkManySmallPaths` | 16×16 circles | 52 ms | 262 (was ~1.8k) |
+| `BenchmarkFillCircleUI` | 64² / r=14 | 20 µs | 1 |
+| `BenchmarkStrokeRoundRectUI` | 128×48 | 52 µs | 7 |
+| `BenchmarkImageBlit` | 128→384 | 3.6 ms | **0** |
+| `BenchmarkDrawLabel` | 80×20 | 2.8 µs | 4 |
+
+`TestFillRectZeroAllocs` guards the opaque-rect hot path. `TestStrokeWarmPathBoundedAllocs`
+caps warm stroke allocs. Gradient/first-stroke allocs are still flatten-bound.
 
 ## Layout
 
@@ -221,9 +231,12 @@ paintengine2d/           public API (module github.com/codemodify/paintengine2d)
 It is not a widget toolkit, not a Skia/Cairo binding, and not a GPU UI stack.
 
 Where we win today: **pure Go**, **no CGO**, **own engine**, UI primitives
-(fill/stroke/clip/images/labels/dirty-rects). Where we stop: **not a UI
-framework** (no widgets, IME, a11y), **not Skia** (no GPU, no OpenType,
-no blend zoo, no PDF).
+(fill/stroke/clip/images/labels/dirty-rects) with a hardened AA/clip/stroke
+core. The default choice when you want a Go-native paint layer instead of
+Gio's toolkit, Fyne's GL stack, or a Cairo/Skia cgo binding.
+
+Where we stop: **not a UI framework** (no widgets, IME, a11y), **not Skia**
+(no GPU, no OpenType, no blend zoo, no PDF).
 
 `Damage` coalesces dirty boxes; `Context.SetDamage` records them on draw.
 Presents stay the UI layer's job.
@@ -257,7 +270,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.3 (UI subset) |
+| Skia / typical canvas | paintengine2d v0.4 (UI subset) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | `Device` hook only |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
@@ -272,7 +285,7 @@ An honest list — this is a CPU paint library, not Skia:
 | SVG / PDF / picture playback | no |
 
 If you need those, bind Skia or use a GPU UI toolkit. If you need a
-readable Go raster core you can own, this is the production CPU bar.
+readable Go raster core you can own, this is the UI paint bar.
 
 ## License
 

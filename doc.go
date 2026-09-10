@@ -39,4 +39,21 @@
 // [FontAtlas] + [GlyphRun] + [Context.DrawGlyphs], with [NullShaper] for
 // bitmap labels. IME, OpenType, and a11y belong in a framework above this
 // package. GPU, PDF, and HDR are out of scope.
+//
+// # Skia / JUCE mapping
+//
+//	SkCanvas / juce::Graphics  →  [Context]
+//	SkPaint / juce::FillType   →  [Paint]
+//	SkPath                     →  [Path]
+//	SkCanvas::save/restore     →  [Context.Save] / [Context.Restore]
+//	clipRect / clipPath        →  [Context.ClipRect] / [Context.ClipPath]
+//	drawImageRect              →  [Context.DrawImageRect]
+//	SkTextBlob                 →  [GlyphRun] + [Shaper] (hook only)
+//
+// # Performance contracts
+//
+// Opaque integer-aligned [Context.FillRect] is allocation-free.
+// Repeated strokes reuse flatten/outline scratch on [CPUDevice].
+// [Context.ClipPath] rasterizes only the path's device-space bounds.
+// Non-finite coordinates and matrices are ignored (no panic).
 package paintengine2d
