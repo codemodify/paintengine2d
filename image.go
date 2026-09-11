@@ -27,6 +27,10 @@ type Image struct {
 	// Stride is bytes per row. Zero means packed (Width * 4).
 	Stride int
 	Pix    []byte
+	// Epoch increments when pixels change ([Image.Clear], [Image.SetColor],
+	// [Image.Touch]). [GPUDevice] keys its texture cache on this so a reused
+	// glyph/icon atlas is re-uploaded after an in-place bake.
+	Epoch uint64
 }
 
 // NewImage allocates a transparent packed w×h pixmap (stride = width*4).
@@ -147,6 +151,16 @@ func (im *Image) SetColor(x, y int, c Color) {
 	im.Pix[i+1] = g
 	im.Pix[i+2] = b
 	im.Pix[i+3] = a
+	im.Epoch++
+}
+
+// Touch records that Pix was mutated in place (atlas rebake, shm rewrite).
+// Call this after writing Image.Pix directly so [GPUDevice] drops the stale
+// texture. [Image.Clear] and [Image.SetColor] already bump [Image.Epoch].
+func (im *Image) Touch() {
+	if im != nil {
+		im.Epoch++
+	}
 }
 
 // Clear fills the entire pixmap with c (premultiplied). Padding bytes
@@ -170,6 +184,7 @@ func (im *Image) Clear(c Color) {
 			i += 4
 		}
 	}
+	im.Epoch++
 }
 
 // Clone returns a packed deep copy of the pixmap.

@@ -49,7 +49,8 @@
 //
 // # UI subset
 //
-// v0.8.0 is the GPU milestone: paths, AA fill/stroke (CPU), GPU
+// v0.8.1 caches GPU flatten/tessellation and keys atlas textures on
+// [Image.Epoch]. v0.8.0 is the GPU milestone: paths, AA fill/stroke (CPU), GPU
 // stencil-and-cover (Linux EGL), linear (and radial) gradients, clip
 // rect/path, images with RGB blit tint, WrapImage stride, dirty-rect
 // recording, and text hooks ([FontAtlas] + [GlyphRun] + [Shaper] +

@@ -26,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.8.0
+go get github.com/codemodify/paintengine2d@v0.8.1
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -79,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.8.0 | Notes |
+| Feature | v0.8.1 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -96,7 +96,7 @@ go run ./examples/paths  -o paths.png
 | Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 atlas; `GlyphRun.Bounds`; no OpenType |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
-| `GPUDevice` (Linux EGL/GLES2) | **done** | stencil-and-cover; `UITK_PAINT`; CPU fallback |
+| `GPUDevice` (Linux EGL/GLES2) | **done** | stencil-and-cover; flatten/tess cache; atlas epoch |
 | SIMD / HDR / PDF | deferred | |
 | X11 / Wayland / Win32 windowing | **other repos** | |
 | Widgets, IME, a11y, WM policy | **other repos** | |
@@ -191,11 +191,12 @@ flowchart TB
 - **`CPUDevice`** flattens curves in device space, expands strokes in user
   space (width follows the transform), then rasterizes.
 - **`GPUDevice`** (Linux + CGO) flattens the same paths, expands strokes with
-  the same pool, then fills with stencil-and-cover. Linear/radial ramps are
-  1D textures; images and glyph atlases are textured quads. Clip path masks
-  from `Context` are uploaded as coverage textures. `UITK_PAINT=cpu` (or
-  `CGO_ENABLED=0`) keeps the CPU engine. `gpu` requires EGL; `auto` (unset)
-  tries GPU and falls back.
+  the same pool, then fills with stencil-and-cover. Flattened contours and
+  triangle fans are cached so a warm Fill/Stroke does not CPU-flatten again.
+  Linear/radial ramps are 1D textures; images and glyph atlases are textured
+  quads keyed on [Image.Epoch]. Clip path masks from `Context` are uploaded
+  as coverage textures. `UITK_PAINT=cpu` (or `CGO_ENABLED=0`) keeps the CPU
+  engine. `gpu` requires EGL; `auto` (unset) tries GPU and falls back.
 
 ### Scanline AA (v0)
 
@@ -402,7 +403,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.8 (GPU milestone) |
+| Skia / typical canvas | paintengine2d v0.8.1 (GPU cache) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | Linux EGL/GLES2 `GPUDevice`; no Vulkan/Metal |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |

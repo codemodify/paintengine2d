@@ -33,9 +33,19 @@ type AtlasCell struct {
 }
 
 // FontAtlas is a GPU/CPU glyph sheet. The image is premul RGBA like [Image].
+// After rewriting Image.Pix in place, call [Image.Touch] so the GPU atlas
+// epoch invalidates the cached texture.
 type FontAtlas struct {
 	Image *Image
 	Cells map[GlyphID]AtlasCell
+}
+
+// Epoch is the atlas image epoch (0 if Image is nil).
+func (a *FontAtlas) Epoch() uint64 {
+	if a == nil || a.Image == nil {
+		return 0
+	}
+	return a.Image.Epoch
 }
 
 // Cell returns the atlas cell for id, or false if missing.
