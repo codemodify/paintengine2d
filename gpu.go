@@ -34,6 +34,10 @@ type EGLNative struct {
 // [GPUDevice] (Linux + CGO + working EGL). Safe to call from tests.
 func GPUAvailable() bool { return gpuAvailable() }
 
+// GPU flatten/tessellation reuse and atlas epoch live on [GPUDevice]:
+// identical Fill/Stroke geometry is not CPU-flattened again, and an
+// [Image.Epoch] bump (or [Image.Touch]) invalidates the texture cache.
+
 // NewGPUDevice creates an offscreen GLES framebuffer of w×h device pixels.
 func NewGPUDevice(w, h int) (*GPUDevice, error) { return newGPUDevice(w, h) }
 

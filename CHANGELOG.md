@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.8.1 — 2026-09-11
+
+GPU hot-path reuse. Fill/Stroke no longer CPU-flatten identical geometry
+every draw. Glyph/icon atlases re-upload when pixels change.
+
+### Added
+
+- GPU flatten + tessellation cache keyed on path content, transform,
+  fill rule, and stroke style (triangle fans reused on cache hit)
+- `Image.Epoch` / `Image.Touch` — atlas epoch for in-place pixmap updates
+- `FontAtlas.Epoch` reads the sheet's image epoch
+- Tests: cache hits across path instances; epoch bump on Clear/SetColor/Touch
+
+### Changed
+
+- `GPUDevice.Fill` / `Stroke` look up cached contours and fans
+- `GPUDevice` texture cache includes `Image.Epoch` so a rebaked atlas
+  is not stuck on stale GPU texels
+
 ## 0.8.0 — 2026-09-11
 
 GPU milestone. Pure-Go API; optional CGO for Linux EGL / OpenGL ES 2.

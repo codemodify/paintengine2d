@@ -148,6 +148,8 @@ import (
 // GPUDevice is the Linux EGL / OpenGL ES 2 paint backend.
 // It implements [Device] with stencil-and-cover path fill, stroke expansion
 // reused from the CPU stroker, linear/radial ramps, and textured blits.
+// Flattened contours and triangle fans are cached per path content + xform;
+// glyph/icon atlases are re-uploaded when [Image.Epoch] changes.
 type GPUDevice struct {
 	w, h int
 
@@ -187,12 +189,14 @@ type GPUDevice struct {
 
 	texCache map[uintptr]gpuTex
 	gradRamp [256 * 4]byte
+	tess     *tessCache
 }
 
 type gpuTex struct {
 	id     C.GLuint
 	w, h   int
 	nbytes int
+	epoch  uint64
 }
 
 type gpuSurface struct {
@@ -266,6 +270,7 @@ func initGPU(n EGLNative, window bool) (*GPUDevice, error) {
 		ownEGL:   true,
 		texCache: make(map[uintptr]gpuTex),
 		quad:     make([]float32, 16),
+		tess:     newTessCache(),
 	}
 	if d.w < 1 {
 		d.w = 1
@@ -564,11 +569,11 @@ func (d *GPUDevice) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if err := d.MakeCurrent(); err != nil {
 		return
 	}
-	d.preparePath(path, xform)
-	if len(d.contours) == 0 {
+	e := d.tess.lookupFill(path, xform, paint.FillRule)
+	if e == nil {
 		return
 	}
-	d.stencilAndCover(paint, xform, clip, int(paint.FillRule))
+	d.stencilAndCover(e.contours, paint, xform, clip, int(paint.FillRule), e.verts, e.box)
 }
 
 func (d *GPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
@@ -586,31 +591,11 @@ func (d *GPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if err := d.MakeCurrent(); err != nil {
 		return
 	}
-	tol := float32(0.2) / scale
-	d.packPath(path)
-	raster.Flatten(d.verbs, d.pts, tol, &d.contours, &d.closedC)
-	user, closed := d.contours, d.closedC
-	if len(st.Dash) > 0 {
-		user, closed = raster.Dash(user, closed, st.Dash, st.DashOffset)
-	}
-	outlines := d.pool.Expand(user, closed, raster.StrokeOpts{
-		Width: st.Width, Cap: int(st.Cap), Join: int(st.Join), MiterLimit: st.MiterLimit,
-	})
-	if len(outlines) == 0 {
+	e := d.tess.lookupStroke(path, xform, st)
+	if e == nil {
 		return
 	}
-	d.contours = d.contours[:0]
-	d.closedC = d.closedC[:0]
-	for _, c := range outlines {
-		tc := make([]raster.Vec2, len(c))
-		for i, p := range c {
-			q := xform.Transform(Point{p.X, p.Y})
-			tc[i] = raster.Vec2{X: q.X, Y: q.Y}
-		}
-		d.contours = append(d.contours, tc)
-		d.closedC = append(d.closedC, true)
-	}
-	d.stencilAndCover(paint, xform, clip, raster.FillNonZero)
+	d.stencilAndCover(e.contours, paint, xform, clip, raster.FillNonZero, e.verts, e.box)
 }
 
 func (d *GPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip) {
@@ -805,8 +790,10 @@ func (d *GPUDevice) applyClip(clip Clip, bounds Rect) bool {
 	return true
 }
 
-func (d *GPUDevice) stencilAndCover(paint Paint, xform Matrix, clip Clip, rule int) {
-	box := d.contourBounds()
+func (d *GPUDevice) stencilAndCover(contours [][]raster.Vec2, paint Paint, xform Matrix, clip Clip, rule int, verts []float32, box Rect) {
+	if box.Empty() {
+		box = contourBoundsOf(contours)
+	}
 	if !d.applyClip(clip, box) {
 		return
 	}
@@ -822,8 +809,12 @@ func (d *GPUDevice) stencilAndCover(paint Paint, xform Matrix, clip Clip, rule i
 		C.glStencilOpSeparate(C.GL_FRONT, C.GL_KEEP, C.GL_KEEP, C.GL_INCR_WRAP)
 		C.glStencilOpSeparate(C.GL_BACK, C.GL_KEEP, C.GL_KEEP, C.GL_DECR_WRAP)
 	}
-	for _, c := range d.contours {
-		d.drawFan(c)
+	if len(verts) >= 12 {
+		d.drawTris(verts)
+	} else {
+		for _, c := range contours {
+			d.drawFan(c)
+		}
 	}
 	C.glColorMask(C.GL_TRUE, C.GL_TRUE, C.GL_TRUE, C.GL_TRUE)
 	if rule == int(FillEvenOdd) {
@@ -949,7 +940,7 @@ func (d *GPUDevice) uploadMask(clip Clip) {
 
 func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 	key := uintptr(unsafe.Pointer(src))
-	if e, ok := d.texCache[key]; ok && e.w == src.Width && e.h == src.Height && e.nbytes == len(src.Pix) {
+	if e, ok := d.texCache[key]; ok && e.w == src.Width && e.h == src.Height && e.nbytes == len(src.Pix) && e.epoch == src.Epoch {
 		return e.id
 	}
 	if e, ok := d.texCache[key]; ok {
@@ -979,7 +970,7 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 		pix = pack
 	}
 	C.glTexImage2D(C.GL_TEXTURE_2D, 0, C.GL_RGBA, C.GLsizei(src.Width), C.GLsizei(src.Height), 0, C.GL_RGBA, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&pix[0]))
-	d.texCache[key] = gpuTex{id: id, w: src.Width, h: src.Height, nbytes: len(src.Pix)}
+	d.texCache[key] = gpuTex{id: id, w: src.Width, h: src.Height, nbytes: len(src.Pix), epoch: src.Epoch}
 	return id
 }
 
