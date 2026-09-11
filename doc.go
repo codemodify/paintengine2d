@@ -1,9 +1,10 @@
-// Package paintengine2d is a from-scratch, pure-Go 2D paint / raster engine.
+// Package paintengine2d is a from-scratch 2D paint engine with a pure-Go
+// public API and a CPU or GPU backend.
 //
-// It is a software canvas: you build paths, configure paints (solid color or
-// linear gradient, fill or stroke), and a CPU scanline anti-aliased backend
-// composites into a premultiplied RGBA pixmap. There is no CGO and no
-// dependency on Skia, Cairo, Blend2D, AGG, Gio, or NanoVG.
+// The default canvas is a software scanline-AA rasterizer. On Linux with
+// CGO, [GPUDevice] implements the same [Device] seam via EGL / OpenGL ES 2
+// (stencil-and-cover fill/stroke, linear/radial ramps, textured blit).
+// There is no dependency on Skia, Cairo, Blend2D, AGG, Gio, or NanoVG.
 //
 // # Quick start
 //
@@ -30,8 +31,9 @@
 // # Backends
 //
 // [Context] is the public canvas (save/restore, transform, clip, draw).
-// Rasterization is delegated to a [Device]. v0 ships [CPUDevice]. A future
-// GPU device can implement the same interface without changing call sites.
+// Rasterization is delegated to a [Device]. [CPUDevice] is always available.
+// [GPUDevice] (Linux + CGO + EGL) implements the same interface.
+// [OpenSurface] / [EnvPaint] pick cpu, gpu, or auto.
 //
 // # Consumers (other repositories)
 //
@@ -47,12 +49,13 @@
 //
 // # UI subset
 //
-// v0.7.2 is UI-foundation ready: paths, AA fill/stroke, linear (and radial)
-// gradients, clip rect/path, images with RGB blit tint, WrapImage stride,
-// dirty-rect recording, and text hooks ([FontAtlas] + [GlyphRun] +
-// [Shaper] + [Context.DrawGlyphs], with [NullShaper] for bitmap labels;
-// Paint.Color themes a white atlas). IME, OpenType, and a11y belong in a
-// framework above this package. GPU, PDF, and HDR are out of scope.
+// v0.8.0 is the GPU milestone: paths, AA fill/stroke (CPU), GPU
+// stencil-and-cover (Linux EGL), linear (and radial) gradients, clip
+// rect/path, images with RGB blit tint, WrapImage stride, dirty-rect
+// recording, and text hooks ([FontAtlas] + [GlyphRun] + [Shaper] +
+// [Context.DrawGlyphs], with [NullShaper] for bitmap labels; Paint.Color
+// themes a white atlas). IME, OpenType, and a11y belong in a framework
+// above this package. PDF and HDR remain out of scope.
 //
 // # Skia / JUCE mapping
 //
