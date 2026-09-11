@@ -14,6 +14,21 @@ func TestBlendSrcOverOpaqueAndPartial(t *testing.T) {
 	}
 }
 
+func TestTintPremulRGBWhiteAtlas(t *testing.T) {
+	r, g, b, a := TintPremulRGB(255, 255, 255, 255, 255, 0, 0)
+	if r != 255 || g != 0 || b != 0 || a != 255 {
+		t.Fatalf("white * red = %d %d %d %d", r, g, b, a)
+	}
+	r, g, b, a = TintPremulRGB(128, 128, 128, 128, 255, 0, 0)
+	if r != 128 || g != 0 || b != 0 || a != 128 {
+		t.Fatalf("premul white * red = %d %d %d %d", r, g, b, a)
+	}
+	r, g, b, a = TintPremulRGB(200, 80, 40, 200, 255, 255, 255)
+	if r != 200 || g != 80 || b != 40 || a != 200 {
+		t.Fatalf("white tint is a no-op: %d %d %d %d", r, g, b, a)
+	}
+}
+
 func TestSampleBilinearCenterAndOutside(t *testing.T) {
 	pix := []byte{
 		255, 0, 0, 255, 0, 255, 0, 255,

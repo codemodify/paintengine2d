@@ -138,7 +138,9 @@ type RadialGradient struct {
 //
 // If Shader is non-nil it overrides Color. AntiAlias is reserved; the CPU
 // backend always anti-aliases path edges (there is no jaggy mode).
-// Filter applies to image blits. Blend is src-over unless documented later.
+// Filter applies to image blits. On blit / DrawGlyphs, Color RGB multiplies
+// premul samples and Color.A modulates coverage (zero-value paint = untinted).
+// Blend is src-over unless documented later.
 type Paint struct {
 	Color     Color
 	Shader    Shader

@@ -533,8 +533,9 @@ func (c *Context) DrawImageRect(img *Image, src, dst Rect) {
 	c.markDirtyUser(dst)
 }
 
-// DrawImageRectPaint is [Context.DrawImageRect] with an alpha modulator
-// (paint.Color.A) and optional extra color tint reserved for later.
+// DrawImageRectPaint is [Context.DrawImageRect] with a color tint:
+// paint.Color RGB multiplies premul blit samples; Color.A modulates coverage.
+// A white atlas or icon sheet can be themed by setting Color to the UI accent.
 func (c *Context) DrawImageRectPaint(img *Image, src, dst Rect, paint Paint) {
 	if img == nil {
 		return

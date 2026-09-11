@@ -30,6 +30,16 @@ func mul255(a, b uint8) uint8 {
 	return uint8((uint16(a)*uint16(b) + 127) / 255)
 }
 
+// TintPremulRGB multiplies premul RGB by a straight sRGB tint (tr, tg, tb).
+// Alpha is unchanged. A white tint (255, 255, 255) is a no-op. This is the
+// theming operator for a white glyph/icon atlas: sample * Color.RGB.
+func TintPremulRGB(sr, sg, sb, sa, tr, tg, tb uint8) (r, g, b, a uint8) {
+	if tr == 255 && tg == 255 && tb == 255 {
+		return sr, sg, sb, sa
+	}
+	return mul255(sr, tr), mul255(sg, tg), mul255(sb, tb), sa
+}
+
 // SampleBilinearPremul samples a premul RGBA buffer with bilinear filtering.
 // Pixels outside [0,w)×[0,h) are treated as transparent. stride is bytes/row
 // (0 or < w*4 means packed).

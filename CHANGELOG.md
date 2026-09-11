@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.7.2 — 2026-09-11
+
+Blit RGB tint so a white icon/glyph atlas can be themed from `Paint.Color`.
+Still pixels-only: no widgets, no windowing.
+
+### Added
+
+- `Paint.Color` RGB multiplies premul src-over blit samples (`Device.Blit`,
+  `DrawImageRectPaint`, `DrawGlyphs` / `DrawLabel`). Alpha still modulates
+  coverage. Zero-value paint stays unmodulated.
+- Goldens: `image_tint`, `glyph_tint` (37 scenes)
+- Tests: white-atlas tint, premul multiply, 1:1 nearest + scaled bilinear,
+  tinted glyphs, tinted 1:1 0-alloc
+
 ## 0.7.1 — 2026-09-11
 
 Production hardening on the v0.7 UI-foundation surface. Still pixels-only:

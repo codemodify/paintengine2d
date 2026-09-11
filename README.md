@@ -25,7 +25,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.7.1
+go get github.com/codemodify/paintengine2d@v0.7.2
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -78,7 +78,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.7.1 | Notes |
+| Feature | v0.7.2 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -88,7 +88,7 @@ go run ./examples/paths  -o paths.png
 | Stroke caps / joins / miter | **done** | width ≤ 0 is a no-op |
 | Dashes | extra | present; not required for UI bar |
 | Clip rect + clip path | **done** | intersect; `ClipPathRule` for even-odd |
-| Image blit nearest + bilinear | **done** | |
+| Image blit nearest + bilinear | **done** | `Paint.Color` RGB-tints premul samples |
 | Wrap existing pixmap (`WrapImage`) | **done** | packed or padded stride |
 | Dirty-rect `Damage` | **done** | widgets **and** decoration redraws |
 | Clip queries / `QuickReject` | **done** | framework skip-paint |
@@ -99,7 +99,8 @@ go run ./examples/paths  -o paths.png
 | X11 / Wayland / Win32 windowing | **other repos** | |
 | Widgets, IME, a11y, WM policy | **other repos** | |
 
-**Text:** [Context.DrawGlyphs] blits a font atlas. [Context.DrawLabel] uses
+**Text:** [Context.DrawGlyphs] blits a font atlas. [Paint.Color] multiplies
+premul samples so a white sheet can be themed. [Context.DrawLabel] uses
 [NullShaper] for ASCII bitmap labels. A future shaper implements [Shaper]
 only — no Context/Device break. IME, bidi, line-break, and a11y are
 framework concerns.
@@ -268,7 +269,7 @@ go test -fuzz=FuzzTextHooks -fuzztime=15s
 go test -fuzz=FuzzClipTransform -fuzztime=15s
 ```
 
-Goldens compare premul RGBA with a small per-channel tolerance (35 scenes).
+Goldens compare premul RGBA with a small per-channel tolerance (37 scenes).
 Quality tests also assert geometry without files (circle AA rim, winding
 holes, dash gaps, nearest vs bilinear, NaN/degenerate, scaled strokes).
 
@@ -389,10 +390,10 @@ of this module. Do not grow widgets or windowing here.
 | 1 | Primitives: paths (lines/quads/cubics), AA fill+stroke, rect/roundrect/ellipse/arc | **yes** |
 | 2 | Paint: solid, linear (+ radial), tile modes; caps/joins/miter; dashes correct | **yes** |
 | 3 | Canvas: save/restore, affine xforms, clip rect+path, Clear, FillRect, Fill/Stroke path | **yes** |
-| 4 | Images: DrawImage/DrawImageRect, nearest+bilinear, WrapImage/stride | **yes** |
-| 5 | Text hooks: FontAtlas / GlyphRun / Shaper + bitmap/atlas blit (HarfBuzz later) | **yes** |
+| 4 | Images: DrawImage/DrawImageRect, nearest+bilinear, RGB tint, WrapImage/stride | **yes** |
+| 5 | Text hooks: FontAtlas / GlyphRun / Shaper + tinted bitmap/atlas blit (HarfBuzz later) | **yes** |
 | 6 | Damage: dirty-rect coalescing + QuickReject / clip bounds | **yes** |
-| 7 | Correctness: unit + 35 goldens; fuzz without panic; `CGO_ENABLED=0` green | **yes** |
+| 7 | Correctness: unit + 37 goldens; fuzz without panic; `CGO_ENABLED=0` green | **yes** |
 | 8 | Perf: benches documented; FillRect, 1:1 nearest blit, warm stroke/path fill are 0-alloc | **yes** |
 | 9 | Docs: layering, feature matrix, limitations, how to verify | **yes** |
 | 10 | API stability notes for a UI kit | **yes** (below) |

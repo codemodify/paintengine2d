@@ -48,6 +48,8 @@ func TestGoldenImages(t *testing.T) {
 		{"aa_tiny_glyphs", sceneAATinyGlyphs, 120, 32},
 		{"clip_xform_edge", sceneClipXformEdge, 96, 96},
 		{"wrap_shm_pad", sceneWrapShmPad, 80, 48},
+		{"image_tint", sceneImageTint, 128, 48},
+		{"glyph_tint", sceneGlyphTint, 160, 48},
 	}
 
 	dir := filepath.Join("testdata", "golden")
@@ -480,6 +482,32 @@ func sceneWrapShmPad(ctx *Context) {
 	tmp.DrawRoundRect(XYWH(64, 6, 10, 36), 4, 4, Fill(RGB(0.16, 0.17, 0.20)))
 	tmp.DrawRoundRect(XYWH(65, 14, 8, 14), 3, 3, Fill(RGB(0.48, 0.50, 0.58)))
 	ctx.DrawImageRectPaint(shm, XYWH(0, 0, float32(w), float32(h)), XYWH(0, 0, float32(w), float32(h)), Paint{Color: White, Filter: FilterNearest})
+}
+
+func sceneImageTint(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	src := NewImage(8, 8)
+	src.Clear(White)
+	colors := []Color{
+		RGB(0.95, 0.32, 0.28),
+		RGB(0.25, 0.78, 0.52),
+		RGB(0.35, 0.60, 1.0),
+		RGB(0.95, 0.82, 0.28),
+	}
+	for i, c := range colors {
+		x := float32(8 + i*30)
+		ctx.DrawImageRectPaint(src, XYWH(0, 0, 8, 8), XYWH(x, 8, 8, 8), Paint{Color: c, Filter: FilterNearest})
+		ctx.DrawImageRectPaint(src, XYWH(0, 0, 8, 8), XYWH(x, 22, 20, 16), Paint{Color: c, Filter: FilterBilinear})
+	}
+}
+
+func sceneGlyphTint(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	atlas := NewBitmapAtlas(White)
+	ctx.DrawLabel("THEME", atlas, Pt(8, 8), Paint{Color: RGB(0.95, 0.38, 0.32), Filter: FilterNearest})
+	ctx.DrawLabel("THEME", atlas, Pt(8, 20), Paint{Color: RGB(0.30, 0.80, 0.55), Filter: FilterNearest})
+	ctx.DrawLabel("THEME", atlas, Pt(8, 32), Paint{Color: RGB(0.40, 0.65, 1.0), Filter: FilterNearest})
+	ctx.DrawLabel("OK 50%", atlas, Pt(80, 8), Paint{Color: RGBA(1, 0.85, 0.3, 0.5), Filter: FilterNearest})
 }
 
 func sceneBlit(ctx *Context) {

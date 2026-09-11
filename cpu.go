@@ -145,18 +145,13 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 		return
 	}
 
-	modA := paint.Color.A
-	if paint.Shader == nil && (paint.Color == (Color{}) || modA == 0) {
-		// Zero-value paint means "unmodulated blit".
-		modA = 1
-	}
-	if modA <= 0 {
+	tr, tg, tb, mod := blitTint(paint)
+	if mod == 0 {
 		return
 	}
-	mod := uint8(clamp32(modA, 0, 1)*255 + 0.5)
 
 	// UI labels / icons: integer 1:1 nearest under a pure translation.
-	if d.blitNearest1to1(src, srcRect, dstRect, xform, paint, clip, x0, y0, x1, y1, mod) {
+	if d.blitNearest1to1(src, srcRect, dstRect, xform, paint, clip, x0, y0, x1, y1, tr, tg, tb, mod) {
 		return
 	}
 
@@ -191,6 +186,7 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 			if sa == 0 {
 				continue
 			}
+			sr, sg, sb, sa = raster.TintPremulRGB(sr, sg, sb, sa, tr, tg, tb)
 			cover := m
 			if mod != 255 {
 				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
@@ -203,7 +199,7 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 
 // blitNearest1to1 copies integer-aligned 1:1 nearest samples without a
 // per-pixel matrix invert. Used for bitmap labels and UI icons.
-func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip, x0, y0, x1, y1 int, mod uint8) bool {
+func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip, x0, y0, x1, y1 int, tr, tg, tb, mod uint8) bool {
 	if paint.Filter != FilterNearest || !xform.IsTranslation() {
 		return false
 	}
@@ -253,6 +249,7 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 				di += 4
 				continue
 			}
+			sr, sg, sb, sa = raster.TintPremulRGB(sr, sg, sb, sa, tr, tg, tb)
 			cover := m
 			if mod != 255 {
 				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
@@ -262,6 +259,17 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 		}
 	}
 	return true
+}
+
+// blitTint returns the 8-bit RGB multiplier and alpha modulator for a blit.
+// Zero-value paint (and Color.A == 0 with no shader) is unmodulated white.
+func blitTint(paint Paint) (tr, tg, tb, ta uint8) {
+	c := paint.Color
+	if paint.Shader == nil && (c == (Color{}) || c.A == 0) {
+		return 255, 255, 255, 255
+	}
+	c = c.Clamp()
+	return uint8(c.R*255 + 0.5), uint8(c.G*255 + 0.5), uint8(c.B*255 + 0.5), uint8(c.A*255 + 0.5)
 }
 
 func nearInt(v float32) (int, bool) {
