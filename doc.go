@@ -47,10 +47,11 @@
 //
 // # UI subset
 //
-// v0.7.1 is UI-foundation ready: paths, AA fill/stroke, linear (and radial)
-// gradients, clip rect/path, images, WrapImage stride, dirty-rect recording,
-// and text hooks ([FontAtlas] + [GlyphRun] + [Shaper] + [Context.DrawGlyphs],
-// with [NullShaper] for bitmap labels). IME, OpenType, and a11y belong in a
+// v0.7.2 is UI-foundation ready: paths, AA fill/stroke, linear (and radial)
+// gradients, clip rect/path, images with RGB blit tint, WrapImage stride,
+// dirty-rect recording, and text hooks ([FontAtlas] + [GlyphRun] +
+// [Shaper] + [Context.DrawGlyphs], with [NullShaper] for bitmap labels;
+// Paint.Color themes a white atlas). IME, OpenType, and a11y belong in a
 // framework above this package. GPU, PDF, and HDR are out of scope.
 //
 // # Skia / JUCE mapping

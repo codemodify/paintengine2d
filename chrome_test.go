@@ -268,3 +268,20 @@ func TestPadded1to1BlitZeroAllocs(t *testing.T) {
 		t.Fatalf("padded 1:1 blit allocs/op = %.1f, want 0", n)
 	}
 }
+
+func TestBlitTinted1to1ZeroAllocs(t *testing.T) {
+	src := NewImage(16, 12)
+	src.Clear(White)
+	dst := NewImage(32, 24)
+	ctx := NewContext(dst)
+	sr := XYWH(0, 0, 16, 12)
+	dr := XYWH(4, 4, 16, 12)
+	p := Paint{Color: RGB(0.95, 0.35, 0.2), Filter: FilterNearest}
+	ctx.DrawImageRectPaint(src, sr, dr, p)
+	n := testing.AllocsPerRun(50, func() {
+		ctx.DrawImageRectPaint(src, sr, dr, p)
+	})
+	if n != 0 {
+		t.Fatalf("tinted 1:1 nearest blit allocs/op = %.1f, want 0", n)
+	}
+}

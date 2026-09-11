@@ -129,6 +129,61 @@ func TestBitmapPunctuation(t *testing.T) {
 	}
 }
 
+func TestDrawGlyphsRGBTint(t *testing.T) {
+	atlas := NewBitmapAtlas(White)
+	img := NewImage(48, 16)
+	ctx := NewContext(img)
+	ctx.DrawLabel("A", atlas, Pt(2, 2), Paint{Color: RGB(0.2, 0.6, 1), Filter: FilterNearest})
+	found := false
+	for y := 0; y < img.Height && !found; y++ {
+		for x := 0; x < img.Width; x++ {
+			r, g, b, a := rgbAt(img, x, y)
+			if a < 200 {
+				continue
+			}
+			if r > 80 || g < 100 || b < 200 {
+				t.Fatalf("tinted glyph %d,%d = %d %d %d %d", x, y, r, g, b, a)
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("white atlas * accent should paint colored glyphs")
+	}
+}
+
+func TestDrawGlyphsTintedVsWhite(t *testing.T) {
+	atlas := NewBitmapAtlas(White)
+	white := NewImage(32, 16)
+	red := NewImage(32, 16)
+	NewContext(white).DrawLabel("OK", atlas, Pt(2, 2), Paint{Color: White, Filter: FilterNearest})
+	NewContext(red).DrawLabel("OK", atlas, Pt(2, 2), Paint{Color: Red, Filter: FilterNearest})
+	same := true
+	colored := false
+	for y := 0; y < white.Height; y++ {
+		for x := 0; x < white.Width; x++ {
+			wr, wg, wb, wa := rgbAt(white, x, y)
+			rr, rg, rb, ra := rgbAt(red, x, y)
+			if wa != ra {
+				t.Fatalf("tint must keep coverage, %d,%d a %d vs %d", x, y, wa, ra)
+			}
+			if wa < 200 {
+				continue
+			}
+			if wr != rr || wg != rg || wb != rb {
+				same = false
+			}
+			if rr > 200 && rg < 8 && rb < 8 {
+				colored = true
+			}
+		}
+	}
+	if same || !colored {
+		t.Fatal("red theme should recolor white atlas glyphs")
+	}
+}
+
 func TestLabelDamage(t *testing.T) {
 	img := NewImage(48, 16)
 	ctx := NewContext(img)

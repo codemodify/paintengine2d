@@ -115,7 +115,8 @@ func (run GlyphRun) Bounds(origin Point) Rect {
 }
 
 // DrawGlyphs blits each atlas cell in run at origin (user space).
-// paint.Color.A modulates the blit; paint.Filter selects nearest/bilinear
+// paint.Color RGB multiplies premul atlas samples (theme a white sheet);
+// Color.A modulates coverage. paint.Filter selects nearest/bilinear
 // (nearest is the usual choice for pixel fonts).
 func (c *Context) DrawGlyphs(run GlyphRun, origin Point, paint Paint) {
 	if run.Atlas == nil || run.Atlas.Image == nil || len(run.Glyphs) == 0 {
