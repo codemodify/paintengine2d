@@ -33,7 +33,7 @@ type AtlasCell struct {
 }
 
 // FontAtlas is a GPU/CPU glyph sheet. The image is premul RGBA like [Image].
-// After rewriting Image.Pix in place, call [Image.Touch] so the GPU atlas
+// After rewriting Image.Pix in place, call [Image.Bump] so the GPU atlas
 // epoch invalidates the cached texture.
 type FontAtlas struct {
 	Image *Image

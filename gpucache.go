@@ -9,15 +9,15 @@ import (
 // tessCache stores flattened contours and triangle-fan verts so a GPU
 // Fill/Stroke of the same path+xform does not CPU-flatten every frame.
 type tessCache struct {
-	m               map[tessKey]*tessEntry
-	hits, misses    int
-	flattens        int
-	strokePool      raster.StrokePool
-	verbs           []raster.Verb
-	pts             []raster.Vec2
-	contours        [][]raster.Vec2
-	closed          []bool
-	outlineStore    [][]raster.Vec2
+	m            map[tessKey]*tessEntry
+	hits, misses int
+	flattens     int
+	strokePool   raster.StrokePool
+	verbs        []raster.Verb
+	pts          []raster.Vec2
+	contours     [][]raster.Vec2
+	closed       []bool
+	outlineStore [][]raster.Vec2
 }
 
 type tessKind uint8

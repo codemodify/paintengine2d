@@ -49,14 +49,16 @@
 //
 // # UI subset
 //
-// v0.8.1 caches GPU flatten/tessellation and keys atlas textures on
-// [Image.Epoch]. v0.8.0 is the GPU milestone: paths, AA fill/stroke (CPU), GPU
-// stencil-and-cover (Linux EGL), linear (and radial) gradients, clip
-// rect/path, images with RGB blit tint, WrapImage stride, dirty-rect
-// recording, and text hooks ([FontAtlas] + [GlyphRun] + [Shaper] +
-// [Context.DrawGlyphs], with [NullShaper] for bitmap labels; Paint.Color
-// themes a white atlas). IME, OpenType, and a11y belong in a framework
-// above this package. PDF and HDR remain out of scope.
+// v0.9.0 adds a retained [Scene] ([Recorder], [DrawScene]); the GPU
+// batches opaque axis-aligned rects. v0.8.1 caches GPU flatten/tessellation
+// and keys atlas textures on [Image.Epoch]. v0.8.0 is the GPU milestone:
+// paths, AA fill/stroke (CPU), GPU stencil-and-cover (Linux EGL), linear
+// (and radial) gradients, clip rect/path, images with RGB blit tint,
+// WrapImage stride, dirty-rect recording, and text hooks ([FontAtlas] +
+// [GlyphRun] + [Shaper] + [Context.DrawGlyphs], with [NullShaper] for
+// bitmap labels; Paint.Color themes a white atlas). IME, OpenType, and
+// a11y belong in a framework above this package. PDF and HDR remain out
+// of scope.
 //
 // # Skia / JUCE mapping
 //
@@ -67,6 +69,7 @@
 //	clipRect / clipPath        →  [Context.ClipRect] / [Context.ClipPath]
 //	drawImageRect              →  [Context.DrawImageRect]
 //	SkTextBlob                 →  [GlyphRun] + [Shaper] (hook only)
+//	SkPicture / replay         →  [Scene] / [Recorder] / [DrawScene]
 //
 // # Performance contracts
 //

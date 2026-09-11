@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.9.0 — 2026-09-11
+
+Retained scene graph. Widgets record once; the compositor replays and
+the GPU batches opaque axis-aligned rects. CPU [Device] is unchanged.
+Pure Go API; CGO GPU remains Linux-only.
+
+### Added
+
+- `Recorder` — a [Device] that captures draws into a [Scene]
+- `Scene` / `GroupNode` / `Recorder.BeginGroup` / `EndGroup` / `Attach`
+- `DrawScene` replays onto any [Device]
+- GPU batches consecutive opaque axis-aligned rect fills
+- `Image.Bump` (atlas epoch; alias of `Touch`) for in-place glyph packs
+- Tests: recorder matches immediate CPU paint; attach + group xform;
+  scratch-path clone; GPU rect replay
+
 ## 0.8.1 — 2026-09-11
 
 GPU hot-path reuse. Fill/Stroke no longer CPU-flatten identical geometry
@@ -11,7 +27,7 @@ every draw. Glyph/icon atlases re-upload when pixels change.
 
 - GPU flatten + tessellation cache keyed on path content, transform,
   fill rule, and stroke style (triangle fans reused on cache hit)
-- `Image.Epoch` / `Image.Touch` — atlas epoch for in-place pixmap updates
+- `Image.Epoch` / `Image.Bump` / `Image.Touch` — atlas epoch for in-place pixmap updates
 - `FontAtlas.Epoch` reads the sheet's image epoch
 - Tests: cache hits across path instances; epoch bump on Clear/SetColor/Touch
 

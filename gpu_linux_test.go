@@ -52,3 +52,35 @@ func TestGPUFlattenCacheAndAtlasEpoch(t *testing.T) {
 	}
 	_ = tex1
 }
+
+func TestGPUDrawSceneBatchesRects(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	rec := NewRecorder(80, 40)
+	ctx := NewContextDevice(rec)
+	ctx.Clear(RGB(0.1, 0.1, 0.12))
+	ctx.DrawRect(XYWH(4, 4, 16, 12), Fill(RGB(0.8, 0.2, 0.2)))
+	ctx.DrawRect(XYWH(28, 4, 16, 12), Fill(RGB(0.8, 0.2, 0.2)))
+	ctx.DrawRect(XYWH(52, 4, 16, 12), Fill(RGB(0.8, 0.2, 0.2)))
+	scene := rec.Finish()
+
+	dev, err := NewGPUDevice(80, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	DrawScene(scene, dev)
+	img := dev.Snapshot()
+	if img == nil {
+		t.Fatal("snapshot")
+	}
+	_, _, _, a := img.PremulAt(10, 8)
+	if a < 200 {
+		t.Fatalf("batched rect a=%d", a)
+	}
+	_, _, _, a = img.PremulAt(34, 8)
+	if a < 200 {
+		t.Fatalf("second batched rect a=%d", a)
+	}
+}
