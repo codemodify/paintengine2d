@@ -46,4 +46,8 @@ func (d *GPUDevice) Close() error          { return nil }
 func (d *GPUDevice) MakeCurrent() error    { return ErrGPUUnavailable }
 func (d *GPUDevice) Kind() BackendKind     { return BackendGPU }
 
+func (d *GPUDevice) fillOpaqueRects(rects []Rect, color Color, clip Clip) {
+	_, _, _ = rects, color, clip
+}
+
 var _ Device = (*GPUDevice)(nil)

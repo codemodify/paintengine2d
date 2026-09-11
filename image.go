@@ -28,8 +28,8 @@ type Image struct {
 	Stride int
 	Pix    []byte
 	// Epoch increments when pixels change ([Image.Clear], [Image.SetColor],
-	// [Image.Touch]). [GPUDevice] keys its texture cache on this so a reused
-	// glyph/icon atlas is re-uploaded after an in-place bake.
+	// [Image.Bump] / [Image.Touch]). [GPUDevice] keys its texture cache on
+	// this so a reused glyph/icon atlas is re-uploaded after an in-place bake.
 	Epoch uint64
 }
 
@@ -162,6 +162,9 @@ func (im *Image) Touch() {
 		im.Epoch++
 	}
 }
+
+// Bump is [Image.Touch]. uitoolkit calls this after packing a glyph into Pix.
+func (im *Image) Bump() { im.Touch() }
 
 // Clear fills the entire pixmap with c (premultiplied). Padding bytes
 // beyond each row's pixels are left untouched (surface stride).

@@ -17,9 +17,9 @@ func TestImageEpochBumpsOnMutate(t *testing.T) {
 		t.Fatal("SetColor should bump epoch")
 	}
 	e = im.Epoch
-	im.Touch()
+	im.Bump()
 	if im.Epoch != e+1 {
-		t.Fatalf("Touch epoch %d want %d", im.Epoch, e+1)
+		t.Fatalf("Bump epoch %d want %d", im.Epoch, e+1)
 	}
 }
 

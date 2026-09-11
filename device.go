@@ -9,6 +9,7 @@ package paintengine2d
 //
 // [CPUDevice] is always available. On Linux with CGO, [GPUDevice] implements
 // the same interface via EGL / OpenGL ES 2 (stencil-and-cover + textured blit).
+// [Recorder] implements Device by capturing a retained [Scene] for [DrawScene].
 //
 // All geometry is in user space; xform maps user → device pixels.
 // Clip is already in device space.

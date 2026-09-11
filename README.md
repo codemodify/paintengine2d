@@ -26,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.8.1
+go get github.com/codemodify/paintengine2d@v0.9.0
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -79,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.8.1 | Notes |
+| Feature | v0.9.0 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -96,7 +96,8 @@ go run ./examples/paths  -o paths.png
 | Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 atlas; `GlyphRun.Bounds`; no OpenType |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
-| `GPUDevice` (Linux EGL/GLES2) | **done** | stencil-and-cover; flatten/tess cache; atlas epoch |
+| `GPUDevice` (Linux EGL/GLES2) | **done** | stencil-and-cover; flatten/tess cache; atlas epoch; rect batches |
+| Retained `Scene` / `Recorder` / `DrawScene` | **done** | group attach + GPU opaque AA rect batch |
 | SIMD / HDR / PDF | deferred | |
 | X11 / Wayland / Win32 windowing | **other repos** | |
 | Widgets, IME, a11y, WM policy | **other repos** | |
@@ -195,8 +196,9 @@ flowchart TB
   triangle fans are cached so a warm Fill/Stroke does not CPU-flatten again.
   Linear/radial ramps are 1D textures; images and glyph atlases are textured
   quads keyed on [Image.Epoch]. Clip path masks from `Context` are uploaded
-  as coverage textures. `UITK_PAINT=cpu` (or `CGO_ENABLED=0`) keeps the CPU
-  engine. `gpu` requires EGL; `auto` (unset) tries GPU and falls back.
+  as coverage textures. `DrawScene` batches opaque axis-aligned rects.
+  `UITK_PAINT=cpu` (or `CGO_ENABLED=0`) keeps the CPU engine. `gpu` requires
+  EGL; `auto` (unset) tries GPU and falls back.
 
 ### Scanline AA (v0)
 
@@ -403,7 +405,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.8.1 (GPU cache) |
+| Skia / typical canvas | paintengine2d v0.9 (retained scene) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | Linux EGL/GLES2 `GPUDevice`; no Vulkan/Metal |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
@@ -415,7 +417,7 @@ An honest list — this is a CPU paint library, not Skia:
 | Color spaces, ICC, HDR, wide gamut | 8-bit sRGB premul |
 | Hairline raster, MSAA, analytic coverage | 8× scanline AA |
 | SIMD / JIT (Blend2D-class) | portable Go |
-| SVG / PDF / picture playback | no |
+| SVG / PDF / picture playback | retained `Scene` replay (not SVG/PDF) |
 
 If you need those, bind Skia or use a GPU UI toolkit. If you need a
 readable Go raster core you can own, this is the UI paint bar.
@@ -465,6 +467,7 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 - Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`,
   `ClipEmpty`
 - [Device] + [CPUDevice] + [GPUDevice] / [Surface] / [OpenSurface]
+- [Scene] / [Recorder] / [GroupNode] / [DrawScene]
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
   stride; padding bytes are never written
 - [Path] verbs, `AddRect` / `AddRoundRect` / `AddEllipse` / `AddCircle` /
@@ -483,6 +486,7 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 
 - Extra [BlendMode] values (today only src-over; others are not faked)
 - Extra GPU AA (MSAA / coverage fringe); Win/mac GPU; Vulkan
+- Richer scene ops (layers, filters) on top of [Recorder]
 - A HarfBuzz/OpenType [Shaper] in another module that satisfies the hook
 - More path helpers, more tile/filter modes
 

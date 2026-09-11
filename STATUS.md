@@ -1,12 +1,12 @@
 # Overnight status — 2026-09-11
 
-GPU flatten cache + atlas epoch. CPU remains the fallback.
+Retained Scene / Recorder / DrawScene. CPU remains the fallback.
 
 ## Tip
 
 - Branch: `dev`
-- Version: **0.8.1**
-- Prior `dev` tip: `b220e31` (v0.8.0)
+- Version: **0.9.0**
+- Prior `dev` tip: v0.8.1 (flatten cache + atlas epoch)
 
 ## Enable GPU
 
@@ -24,8 +24,9 @@ UITK_PAINT=cpu    # force CPU (CGO_ENABLED=0 tests)
 
 ## Added this wave
 
-- GPU flatten/tessellation cache (warm Fill/Stroke skip CPU flatten)
-- `Image.Epoch` / `Image.Touch` so rebaked atlases re-upload
+- `Scene` / `Recorder` / `DrawScene` retained graph
+- GPU opaque axis-aligned rect batches
+- v0.8.1 flatten/tessellation cache + `Image.Epoch` still on `dev`
 
 ## Hygiene
 

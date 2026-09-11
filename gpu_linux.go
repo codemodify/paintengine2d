@@ -1019,4 +1019,53 @@ func (d *GPUDevice) drawTris(verts []float32) {
 	C.glDisableVertexAttribArray(1)
 }
 
+func (d *GPUDevice) fillOpaqueRects(rects []Rect, color Color, clip Clip) {
+	if d == nil || d.closed || len(rects) == 0 {
+		return
+	}
+	if err := d.MakeCurrent(); err != nil {
+		return
+	}
+	box := rects[0]
+	for _, r := range rects[1:] {
+		box = box.Union(r)
+	}
+	if !d.applyClip(clip, box) {
+		return
+	}
+	cr, cg, cb, ca := color.Premul8()
+	if ca == 0 {
+		C.glDisable(C.GL_SCISSOR_TEST)
+		return
+	}
+	C.glUseProgram(d.prog)
+	C.glUniform2f(d.locVP, C.GLfloat(d.w), C.GLfloat(d.h))
+	C.glUniform1i(d.locMode, 0)
+	C.glUniform4f(d.locColor, C.GLfloat(cr)/255, C.GLfloat(cg)/255, C.GLfloat(cb)/255, C.GLfloat(ca)/255)
+	C.glUniform1i(d.locUseM, 0)
+	C.glColorMask(C.GL_TRUE, C.GL_TRUE, C.GL_TRUE, C.GL_TRUE)
+	C.glStencilFunc(C.GL_ALWAYS, 0, 0xFF)
+	C.glStencilOp(C.GL_KEEP, C.GL_KEEP, C.GL_KEEP)
+	C.glDisable(C.GL_STENCIL_TEST)
+	if ca == 255 {
+		C.glDisable(C.GL_BLEND)
+	}
+	d.verts = d.verts[:0]
+	for _, r := range rects {
+		d.verts = append(d.verts,
+			r.Min.X, r.Min.Y, 0, 0,
+			r.Max.X, r.Min.Y, 1, 0,
+			r.Max.X, r.Max.Y, 1, 1,
+			r.Min.X, r.Min.Y, 0, 0,
+			r.Max.X, r.Max.Y, 1, 1,
+			r.Min.X, r.Max.Y, 0, 1,
+		)
+	}
+	d.drawTris(d.verts)
+	C.glEnable(C.GL_BLEND)
+	C.glEnable(C.GL_STENCIL_TEST)
+	C.glDisable(C.GL_SCISSOR_TEST)
+	d.readDirty = true
+}
+
 var _ Device = (*GPUDevice)(nil)

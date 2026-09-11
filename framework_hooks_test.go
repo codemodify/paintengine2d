@@ -6,8 +6,8 @@ import "testing"
 // just the canvas queries and the paint-cycle shape.
 
 func TestVersionIsFoundationReady(t *testing.T) {
-	if Version != "0.8.1" {
-		t.Fatalf("Version %q, want 0.8.1 GPU flatten cache", Version)
+	if Version != "0.9.0" {
+		t.Fatalf("Version %q, want 0.9.0 retained Scene", Version)
 	}
 }
 
@@ -115,4 +115,20 @@ func TestFrameworkPaintCycleSketch(t *testing.T) {
 	if r > 80 || g > 80 || b > 80 {
 		t.Fatalf("clean sibling should stay background, got %d %d %d", r, g, b)
 	}
+}
+
+func TestFrameworkRecorderScene(t *testing.T) {
+	rec := NewRecorder(64, 48)
+	ctx := NewContextDevice(rec)
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	g := rec.BeginGroup(1, Identity())
+	ctx.DrawRect(XYWH(8, 8, 24, 16), Fill(RGB(0.23, 0.51, 0.93)))
+	rec.EndGroup()
+	s := rec.Finish()
+	if s.Nodes < 2 || g == nil {
+		t.Fatalf("scene %+v group=%v", s, g)
+	}
+	img := NewImage(64, 48)
+	DrawScene(s, NewCPUDevice(img))
+	assertAlpha(t, img, 16, 14, 200, 255, "recorded button")
 }
