@@ -54,10 +54,15 @@ func NewContextDevice(dev Device) *Context {
 // Device returns the low-level backend.
 func (c *Context) Device() Device { return c.dev }
 
-// Image returns the CPU pixmap when the device is a [CPUDevice]; otherwise nil.
+// Image returns a CPU-readable pixmap. [CPUDevice] returns the live target;
+// [GPUDevice] returns a read-back snapshot. Other devices return nil.
 func (c *Context) Image() *Image {
 	if d, ok := c.dev.(*CPUDevice); ok {
 		return d.Image()
+	}
+	type imager interface{ Image() *Image }
+	if i, ok := c.dev.(imager); ok {
+		return i.Image()
 	}
 	return nil
 }

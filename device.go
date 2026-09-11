@@ -7,8 +7,8 @@ package paintengine2d
 // This interface is the stable retarget seam for both a UI framework and a
 // compositor/WM: CPU today, a GPU [Device] later, same Paint call sites.
 //
-// A GPU implementation can satisfy this interface without changing
-// application code that talks to Context. v0 ships only [CPUDevice].
+// [CPUDevice] is always available. On Linux with CGO, [GPUDevice] implements
+// the same interface via EGL / OpenGL ES 2 (stencil-and-cover + textured blit).
 //
 // All geometry is in user space; xform maps user → device pixels.
 // Clip is already in device space.
@@ -36,3 +36,5 @@ type Device interface {
 
 // Compile-time check: the CPU backend implements Device.
 var _ Device = (*CPUDevice)(nil)
+
+// GPUDevice also implements Device (real type on linux+cgo, stub otherwise).

@@ -14,7 +14,8 @@ This repo is pixels + paths + clips + images + text hooks + `Device`.
 No X11, Wayland, or Win32. No widgets.
 
 Best-in-class for *Go UI painting* inside a UI subset (not Skia feature
-parity). No CGO.
+parity). The public API is pure Go. CPU is CGO-free; GPU is optional
+Linux EGL/GLES (`UITK_PAINT=gpu|auto`).
 
 ```go
 img := paintengine2d.NewImage(640, 360)
@@ -25,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.7.2
+go get github.com/codemodify/paintengine2d@v0.8.0
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -38,7 +39,7 @@ stability notes below.
 | | |
 | --- | --- |
 | Language | Go 1.22+ |
-| CGO | none |
+| CGO | none for CPU; optional Linux EGL/GLES for [GPUDevice] |
 | License | MIT |
 | Pixel format | premultiplied 8-bit sRGB RGBA (packed or padded `Stride`) |
 
@@ -49,7 +50,7 @@ This is the default-choice **Go paint core** for both in-app UI and
 compositor chrome: rects, curves, clips, images, dirty-rects, and a text
 *hook* (glyph atlas blit). Attach a caller buffer with [WrapImage] (packed
 or padded stride). Widget trees, windowing, and IME are out of this
-repository. A GPU `Device` can be added later without changing Paint sites.
+repository. A GPU `Device` implements the same Paint sites (`UITK_PAINT=gpu|auto`).
 
 Inspiration (algorithms and API shape only — no vendored code):
 
@@ -78,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.7.2 | Notes |
+| Feature | v0.8.0 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -95,7 +96,8 @@ go run ./examples/paths  -o paths.png
 | Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 atlas; `GlyphRun.Bounds`; no OpenType |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
-| GPU / SIMD / HDR / PDF | deferred | |
+| `GPUDevice` (Linux EGL/GLES2) | **done** | stencil-and-cover; `UITK_PAINT`; CPU fallback |
+| SIMD / HDR / PDF | deferred | |
 | X11 / Wayland / Win32 windowing | **other repos** | |
 | Widgets, IME, a11y, WM policy | **other repos** | |
 
@@ -175,8 +177,9 @@ flowchart TB
     Eng --> Paint["Paint / Color / Stroke"]
     Eng --> Dev["Device"]
     Dev --> CPU["CPUDevice  scanline AA"]
-    Dev -.-> GPU["GPU Device  planned"]
+    Dev --> GPU["GPUDevice  EGL/GLES2"]
     CPU --> Pix["Image / WrapImage  premul RGBA"]
+    GPU --> Pix
     Eng --> Text["GlyphRun / FontAtlas"]
     Eng --> Dmg["Damage  widgets and decorations"]
 ```
@@ -187,6 +190,12 @@ flowchart TB
   device pixels. A GPU implementation can consume that without API breakage.
 - **`CPUDevice`** flattens curves in device space, expands strokes in user
   space (width follows the transform), then rasterizes.
+- **`GPUDevice`** (Linux + CGO) flattens the same paths, expands strokes with
+  the same pool, then fills with stencil-and-cover. Linear/radial ramps are
+  1D textures; images and glyph atlases are textured quads. Clip path masks
+  from `Context` are uploaded as coverage textures. `UITK_PAINT=cpu` (or
+  `CGO_ENABLED=0`) keeps the CPU engine. `gpu` requires EGL; `auto` (unset)
+  tries GPU and falls back.
 
 ### Scanline AA (v0)
 
@@ -256,9 +265,12 @@ type Device interface {
 ## Tests, goldens, benches, fuzz
 
 ```bash
-CGO_ENABLED=0 go test ./...
+CGO_ENABLED=0 go test ./...                    # CPU only (must stay green)
+CGO_ENABLED=1 go test ./...                    # + GPU tests when EGL works
+UITK_PAINT=cpu go test ./...
 UPDATE_GOLDENS=1 go test ./...                 # rewrite testdata/golden/*.png
 go test -bench . -benchmem
+go test -bench BenchmarkChrome -benchmem       # CPU vs GPU UI chrome
 go test -fuzz=FuzzPathBuild -fuzztime=15s
 go test -fuzz=FuzzMatrix -fuzztime=15s
 go test -fuzz=FuzzRasterDraw -fuzztime=15s
@@ -297,6 +309,31 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 | `BenchmarkImageBlit` | 128→384 bilinear | 3.4 ms | **0** |
 | `BenchmarkImageBlitNearestUI` | 32→32 1:1 | 5.9 µs | **0** |
 | `BenchmarkDrawLabel` | 80×20 | 1.5 µs | 4 |
+| `BenchmarkChromeCPU` | 640×420 UI chrome | 6.24 ms | 18 |
+| `BenchmarkChromeGPU` | same scene, EGL/llvmpipe | **1.61 ms** | 46 |
+
+`BenchmarkChromeGPU` is the same titlebar / buttons / track / focus-ring
+sheet as a toolkit frame. On this host's Mesa llvmpipe it is ~4× faster
+than CPU scanline. A real GPU should widen that gap; `UITK_PAINT=cpu`
+keeps the old path.
+
+Enable GPU:
+
+```bash
+UITK_PAINT=auto   # default: GPU if EGL init works, else CPU
+UITK_PAINT=gpu    # require GPU (OpenSurface errors without EGL)
+UITK_PAINT=cpu    # force CPU (also the CGO_ENABLED=0 path)
+```
+
+```go
+surf, err := paintengine2d.OpenSurface(640, 360) // honors UITK_PAINT
+ctx := paintengine2d.NewContextSurface(surf)
+// or, targeting a toolkit EGL window:
+dev, err := paintengine2d.NewGPUDeviceEGL(paintengine2d.EGLNative{
+    Display: disp, Window: eglWin, Platform: paintengine2d.EGLPlatformWayland,
+    Width: w, Height: h,
+})
+```
 
 `TestFillRectZeroAllocs` and `TestBlitNearest1to1ZeroAllocs` guard the blit
 hot paths. `TestStrokeWarmPathBoundedAllocs` / `TestFillCircleWarmZeroAllocs`
@@ -309,7 +346,9 @@ and clip-mask builds still allocate.
 paintengine2d/           public API (module github.com/codemodify/paintengine2d)
   context.go             canvas facade
   device.go              Device interface
+  backend.go             Surface, UITK_PAINT, OpenSurface
   cpu.go                 CPU backend
+  gpu.go / gpu_linux.go  GPUDevice (linux+cgo EGL/GLES2; stub otherwise)
   path.go geom.go …      geometry, paint, image, clip
   internal/raster/       flatten, scanline AA, stroke expand, blend
   examples/hello|gallery|paths
@@ -325,9 +364,9 @@ will both import it. Immediate-mode CPU rasterizer, retained dirty-rect
 helpers (`Damage`, `QuickReject`). Not a widget toolkit, not a compositor,
 not a Skia/Cairo binding.
 
-Where we win today: **pure Go**, **no CGO**, **own engine**, UI primitives
-plus `WrapImage` for caller surfaces. The default paint layer under both
-future consumers.
+Where we win today: **pure-Go API**, **own engine**, CPU without CGO,
+optional Linux GPU, UI primitives plus `WrapImage` for caller surfaces.
+The default paint layer under both future consumers.
 
 Where we stop: **not the UI framework**, **not the WM**, **not Skia**.
 
@@ -342,7 +381,7 @@ shipping hardware backend, not a future hook.
 
 | | Language | CGO / native deps | Engine | GPU | UI toolkit | License (typical) | Best for |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **paintengine2d** | Go 1.22+ | **None** | **Own** CPU scanline AA | Hook only (`Device`) | No | MIT | Shared paint core for a future UI kit **and** WM/DE; tools, tests |
+| **paintengine2d** | Go 1.22+ | **Optional** (EGL/GLES on Linux) | **Own** CPU scanline AA + GPU stencil-and-cover | Yes (Linux EGL) | No | MIT | Shared paint core for a UI kit **and** WM/DE; tools, tests |
 | [Gio](https://gioui.org) | Go | Optional (platform windowing) | Own ops + GPU/CPU renderer | Yes | Yes (widgets, layout, input) | MIT / Unlicense | Full native Go GUIs; not a drop-in paint library |
 | [Fyne](https://fyne.io) | Go | OpenGL / platform via fyne | Own + GL | Yes (via GL) | Yes | BSD-3-Clause | Cross-platform Go apps with batteries-included widgets |
 | Skia bindings | Go/C++ | **Yes** (Skia + toolchain) | Binding | Yes | No (canvas only) | Skia BSD-3 | Production 2D when you want Skia’s completeness and accept CGO |
@@ -363,9 +402,9 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.7 (UI foundation) |
+| Skia / typical canvas | paintengine2d v0.8 (GPU milestone) |
 | --- | --- |
-| GPU backends (GL/Vulkan/Metal) | `Device` hook only |
+| GPU backends (GL/Vulkan/Metal) | Linux EGL/GLES2 `GPUDevice`; no Vulkan/Metal |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
 | Dozens of blend modes | src-over only (`Blend` reserved) |
 | Conic / sweep gradients, image shaders | no |
@@ -402,7 +441,8 @@ of this module. Do not grow widgets or windowing here.
 
 ```bash
 CGO_ENABLED=0 go test ./...
-go test -bench . -benchmem
+CGO_ENABLED=1 go test ./...
+go test -bench BenchmarkChrome -benchmem
 go test -fuzz=FuzzRasterDraw -fuzztime=15s
 go test -fuzz=FuzzWrapImage -fuzztime=15s
 go run ./examples/hello -o hello.png
@@ -423,7 +463,7 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 - Images: `DrawImage` / `DrawImageRect` / `DrawImageRectPaint`
 - Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`,
   `ClipEmpty`
-- [Device] + [CPUDevice] (GPU can implement `Device` later)
+- [Device] + [CPUDevice] + [GPUDevice] / [Surface] / [OpenSurface]
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
   stride; padding bytes are never written
 - [Path] verbs, `AddRect` / `AddRoundRect` / `AddEllipse` / `AddCircle` /
@@ -441,7 +481,7 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 **May grow (additive)**
 
 - Extra [BlendMode] values (today only src-over; others are not faked)
-- A GPU [Device]
+- Extra GPU AA (MSAA / coverage fringe); Win/mac GPU; Vulkan
 - A HarfBuzz/OpenType [Shaper] in another module that satisfies the hook
 - More path helpers, more tile/filter modes
 

@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.8.0 — 2026-09-11
+
+GPU milestone. Pure-Go API; optional CGO for Linux EGL / OpenGL ES 2.
+CPU remains the fallback and the `CGO_ENABLED=0` path.
+
+### Added
+
+- `Surface` / `CPUSurface` / `OpenSurface` / `NewContextSurface`
+- `UITK_PAINT=cpu|gpu|auto` (`EnvPaint`, `ParsePaintPref`)
+- `GPUDevice` — Linux EGL/GLES2 stencil-and-cover fill and stroke,
+  linear/radial 1D ramps, textured blit + tint, clip-mask upload,
+  offscreen pbuffer/FBO and `NewGPUDeviceEGL` for toolkit windows
+- Opaque EGL window configs (`EGL_ALPHA_SIZE` 0) so GPU present cannot
+  revive a fully transparent ARGB window
+- Tests: GPU fill/stroke/blit/clip (skipped without EGL)
+- Benches: `BenchmarkChromeCPU` / `BenchmarkChromeGPU`
+
+### Changed
+
+- `Context.Image` read-backs a GPU snapshot
+- README / godoc: GPU is shipping, not a hook
+
 ## 0.7.2 — 2026-09-11
 
 Blit RGB tint so a white icon/glyph atlas can be themed from `Paint.Color`.

@@ -148,6 +148,59 @@ func BenchmarkClipPathRoundRect(b *testing.B) {
 	}
 }
 
+func paintChrome(ctx *Context) {
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRect(XYWH(0, 0, 640, 36), Linear(LinearGradient{
+		Start: Pt(0, 0), End: Pt(640, 0),
+		Stops: []GradientStop{{0, RGB(0.16, 0.18, 0.22)}, {1, RGB(0.12, 0.22, 0.28)}},
+	}))
+	atlas := NewBitmapAtlas(White)
+	ctx.DrawLabel("APP", atlas, Pt(12, 12), Paint{Color: White, Filter: FilterNearest})
+	for i := 0; i < 6; i++ {
+		x := float32(16 + i*100)
+		ctx.DrawRoundRect(XYWH(x, 56, 88, 32), 6, 6, Fill(RGB(0.23, 0.51, 0.93)))
+		ctx.DrawRoundRect(XYWH(x, 56, 88, 32), 6, 6, Paint{
+			Color: RGB(0.12, 0.28, 0.55), Style: StyleStroke,
+			Stroke: Stroke{Width: 1, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+		})
+	}
+	ctx.DrawRoundRect(XYWH(16, 104, 600, 220), 10, 10, Fill(RGB(0.16, 0.17, 0.20)))
+	ctx.DrawRoundRect(XYWH(600, 112, 10, 120), 4, 4, Fill(RGB(0.45, 0.48, 0.55)))
+	ctx.DrawCircle(Pt(80, 380), 28, Fill(RGB(0.2, 0.7, 0.45)))
+	ctx.DrawRoundRect(XYWH(140, 352, 200, 48), 8, 8, Paint{
+		Color: RGB(0.45, 0.75, 1.0), Style: StyleStroke,
+		Stroke: Stroke{Width: 2, Cap: CapRound, Join: JoinRound, MiterLimit: 4},
+	})
+}
+
+func BenchmarkChromeCPU(b *testing.B) {
+	img := NewImage(640, 420)
+	ctx := NewContext(img)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		paintChrome(ctx)
+	}
+}
+
+func BenchmarkChromeGPU(b *testing.B) {
+	if !GPUAvailable() {
+		b.Skip("no EGL/GLES")
+	}
+	dev, err := NewGPUDevice(640, 420)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer dev.Close()
+	ctx := NewContextDevice(dev)
+	paintChrome(ctx)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		paintChrome(ctx)
+	}
+}
+
 func blobPath() *Path {
 	p := NewPath()
 	p.MoveTo(80, 260)

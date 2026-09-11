@@ -6,8 +6,8 @@ import "testing"
 // just the canvas queries and the paint-cycle shape.
 
 func TestVersionIsFoundationReady(t *testing.T) {
-	if Version != "0.7.2" {
-		t.Fatalf("Version %q, want 0.7.2 blit RGB tint", Version)
+	if Version != "0.8.0" {
+		t.Fatalf("Version %q, want 0.8.0 GPU milestone", Version)
 	}
 }
 
