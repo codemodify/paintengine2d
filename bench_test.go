@@ -201,6 +201,87 @@ func BenchmarkChromeGPU(b *testing.B) {
 	}
 }
 
+func BenchmarkFillRectSmallOnLarge(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	p := Fill(RGB(0.23, 0.51, 0.93))
+	r := XYWH(24, 80, 280, 24)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawRect(r, p)
+	}
+}
+
+func BenchmarkFillRectAASmallOnLarge(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	p := Fill(RGBA(0.23, 0.51, 0.93, 0.35))
+	r := XYWH(24.5, 80.25, 280, 24)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawRect(r, p)
+	}
+}
+
+func BenchmarkFillCircleSmallOnLarge(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	p := Fill(RGB(0.2, 0.7, 0.4))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawCircle(Pt(40, 40), 12, p)
+	}
+}
+
+func BenchmarkDrawLabelWarm(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	atlas := NewBitmapAtlas(White)
+	paint := Paint{Color: White, Filter: FilterNearest}
+	ctx.DrawLabel("Open File", atlas, Pt(32, 86), paint)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawLabel("Open File", atlas, Pt(32, 86), paint)
+	}
+}
+
+func BenchmarkMenuHoverCPU(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	atlas := NewBitmapAtlas(White)
+	bg := RGB(0.16, 0.17, 0.20)
+	hi := RGB(0.23, 0.51, 0.93)
+	label := Paint{Color: White, Filter: FilterNearest}
+	row0 := XYWH(16, 80, 280, 24)
+	row1 := XYWH(16, 104, 280, 24)
+	ctx.Clear(bg)
+	var dirty Damage
+	ctx.SetDamage(&dirty)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prev, next := row0, row1
+		if i&1 == 0 {
+			prev, next = row1, row0
+		}
+		dirty.Reset()
+		dirty.Add(prev)
+		dirty.Add(next)
+		ctx.Save()
+		ctx.ClipToDamage()
+		ctx.ClearRect(prev, bg)
+		ctx.DrawRect(next, Fill(hi))
+		ctx.DrawLabel("Open File", atlas, Pt(24, prev.Min.Y+6), label)
+		ctx.DrawLabel("Open File", atlas, Pt(24, next.Min.Y+6), label)
+		ctx.Restore()
+		_ = ctx.PresentDamage()
+	}
+}
+
 func blobPath() *Path {
 	p := NewPath()
 	p.MoveTo(80, 260)

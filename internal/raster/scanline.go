@@ -81,7 +81,6 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 		r.cover = make([]uint16, width)
 	} else {
 		r.cover = r.cover[:width]
-		clear(r.cover)
 	}
 	if clipX0 < 0 {
 		clipX0 = 0
@@ -92,6 +91,8 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 	if clipX0 >= clipX1 {
 		return r.cover
 	}
+	// Only the clip span is read by the blender; skip O(surface width) work.
+	clear(r.cover[clipX0:clipX1])
 
 	y0 := float32(y)
 	y1 := y0 + 1
@@ -141,13 +142,52 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 			addSpan(r.cover, x0, x1, weight, clipX0, clipX1)
 		}
 	}
-	// Clamp to 255.
-	for i, c := range r.cover {
-		if c > 255 {
+	// Clamp to 255 inside the clip span only.
+	for i := clipX0; i < clipX1; i++ {
+		if r.cover[i] > 255 {
 			r.cover[i] = 255
 		}
 	}
 	return r.cover
+}
+
+// EdgeBounds is the axis-aligned box of all edge endpoints.
+// ok is false when there are no edges.
+func EdgeBounds(edges []Edge) (minX, minY, maxX, maxY float32, ok bool) {
+	if len(edges) == 0 {
+		return 0, 0, 0, 0, false
+	}
+	e0 := edges[0]
+	minX, maxX = e0.X0, e0.X0
+	minY, maxY = e0.Y0, e0.Y0
+	for i := range edges {
+		e := &edges[i]
+		if e.X0 < minX {
+			minX = e.X0
+		}
+		if e.X1 < minX {
+			minX = e.X1
+		}
+		if e.X0 > maxX {
+			maxX = e.X0
+		}
+		if e.X1 > maxX {
+			maxX = e.X1
+		}
+		if e.Y0 < minY {
+			minY = e.Y0
+		}
+		if e.Y1 < minY {
+			minY = e.Y1
+		}
+		if e.Y0 > maxY {
+			maxY = e.Y0
+		}
+		if e.Y1 > maxY {
+			maxY = e.Y1
+		}
+	}
+	return minX, minY, maxX, maxY, true
 }
 
 func sortIsects(a []isect) {
@@ -245,14 +285,14 @@ func addSpan(cover []uint16, x0, x1 float32, weight, clipX0, clipX1 int) {
 // a single pixel row y. Used as the FillRect fast path.
 func RectCoverage(cover []uint16, y int, x0, y0, x1, y1 float32, clipX0, clipX1 int) []uint16 {
 	width := len(cover)
-	for i := range cover {
-		cover[i] = 0
-	}
 	if clipX0 < 0 {
 		clipX0 = 0
 	}
 	if clipX1 > width {
 		clipX1 = width
+	}
+	if clipX0 < clipX1 {
+		clear(cover[clipX0:clipX1])
 	}
 	py0 := float32(y)
 	py1 := py0 + 1

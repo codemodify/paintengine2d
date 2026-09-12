@@ -63,6 +63,39 @@ func TestCoverageRowSharedVertex(t *testing.T) {
 	}
 }
 
+func TestEdgeBoundsEmpty(t *testing.T) {
+	if _, _, _, _, ok := EdgeBounds(nil); ok {
+		t.Fatal("empty edges")
+	}
+}
+
+func TestEdgeBoundsTight(t *testing.T) {
+	edges := BuildEdges([][]Vec2{
+		{{10, 20}, {40, 20}, {40, 35}, {10, 35}, {10, 20}},
+	}, nil)
+	minX, minY, maxX, maxY, ok := EdgeBounds(edges)
+	if !ok {
+		t.Fatal("expected bounds")
+	}
+	if minX < 9.9 || maxX > 40.1 || minY < 19.9 || maxY > 35.1 {
+		t.Fatalf("bounds %v %v %v %v", minX, minY, maxX, maxY)
+	}
+}
+
+func TestRectCoverageClearsOnlyClip(t *testing.T) {
+	cover := make([]uint16, 16)
+	for i := range cover {
+		cover[i] = 99
+	}
+	RectCoverage(cover, 0, 4, 0, 8, 1, 4, 8)
+	if cover[0] != 99 || cover[15] != 99 {
+		t.Fatalf("outside clip must stay untouched, %v", cover)
+	}
+	if cover[5] < 250 {
+		t.Fatalf("interior %d", cover[5])
+	}
+}
+
 func TestMergeIsectsCombinesDirs(t *testing.T) {
 	in := []isect{{x: 1, dir: 1}, {x: 1, dir: -1}, {x: 4, dir: 1}}
 	sortIsects(in)

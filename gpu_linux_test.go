@@ -84,3 +84,51 @@ func TestGPUDrawSceneBatchesRects(t *testing.T) {
 		t.Fatalf("second batched rect a=%d", a)
 	}
 }
+
+func TestGPUFillRectSkipsTessCache(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	dev, err := NewGPUDevice(64, 48)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	p := RectPath(XYWH(4, 6, 20, 12))
+	clip := Clip{HasScissor: true, Scissor: XYWH(0, 0, 64, 48)}
+	dev.Fill(p, Identity(), Fill(RGB(0.2, 0.5, 0.9)), clip)
+	if dev.tess.flattens != 0 || dev.tess.misses != 0 {
+		t.Fatalf("axis-aligned FillRect should skip tess flatten=%d miss=%d", dev.tess.flattens, dev.tess.misses)
+	}
+	img := dev.Snapshot()
+	_, _, _, a := img.PremulAt(10, 10)
+	if a < 200 {
+		t.Fatalf("gpu rect a=%d", a)
+	}
+}
+
+func TestGPUClearRectAndPresentRects(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	dev, err := NewGPUDevice(48, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	ctx := NewContextDevice(dev)
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.ClearRect(XYWH(4, 4, 12, 8), RGB(0.9, 0.2, 0.2))
+	img := ctx.Image()
+	r, _, _, a := img.PremulAt(8, 6)
+	if a < 200 || r < 200 {
+		t.Fatalf("cleared rect rgba r=%d a=%d", r, a)
+	}
+	r, _, _, a = img.PremulAt(30, 20)
+	if r > 80 || a < 20 {
+		t.Fatalf("outside ClearRect should stay background r=%d a=%d", r, a)
+	}
+	if err := ctx.PresentRects([]Rect{XYWH(4, 4, 12, 8)}); err != nil {
+		t.Fatal(err)
+	}
+}

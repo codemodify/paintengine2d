@@ -38,13 +38,15 @@ func (d *GPUDevice) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 func (d *GPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip) {
 	_, _, _, _, _, _ = src, srcRect, dstRect, xform, paint, clip
 }
-func (d *GPUDevice) Image() *Image         { return nil }
-func (d *GPUDevice) Snapshot() *Image      { return nil }
-func (d *GPUDevice) Present() error        { return ErrGPUUnavailable }
-func (d *GPUDevice) Resize(w, h int) error { _, _ = w, h; return ErrGPUUnavailable }
-func (d *GPUDevice) Close() error          { return nil }
-func (d *GPUDevice) MakeCurrent() error    { return ErrGPUUnavailable }
-func (d *GPUDevice) Kind() BackendKind     { return BackendGPU }
+func (d *GPUDevice) Image() *Image             { return nil }
+func (d *GPUDevice) Snapshot() *Image          { return nil }
+func (d *GPUDevice) Present() error            { return ErrGPUUnavailable }
+func (d *GPUDevice) PresentRects([]Rect) error { return ErrGPUUnavailable }
+func (d *GPUDevice) ClearRect(r Rect, c Color) { _, _ = r, c }
+func (d *GPUDevice) Resize(w, h int) error     { _, _ = w, h; return ErrGPUUnavailable }
+func (d *GPUDevice) Close() error              { return nil }
+func (d *GPUDevice) MakeCurrent() error        { return ErrGPUUnavailable }
+func (d *GPUDevice) Kind() BackendKind         { return BackendGPU }
 
 func (d *GPUDevice) fillOpaqueRects(rects []Rect, color Color, clip Clip) {
 	_, _, _ = rects, color, clip

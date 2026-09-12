@@ -37,6 +37,9 @@ func GPUAvailable() bool { return gpuAvailable() }
 // GPU flatten/tessellation reuse and atlas epoch live on [GPUDevice]:
 // identical Fill/Stroke geometry is not CPU-flattened again, and an
 // [Image.Epoch] bump (or [Image.Touch]) invalidates the texture cache.
+// Axis-aligned rect fills skip stencil-and-cover. [GPUDevice.PresentRects]
+// hints the compositor via eglSwapBuffersWithDamage when the extension
+// exists.
 
 // NewGPUDevice creates an offscreen GLES framebuffer of w×h device pixels.
 func NewGPUDevice(w, h int) (*GPUDevice, error) { return newGPUDevice(w, h) }

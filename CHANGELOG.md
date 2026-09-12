@@ -2,6 +2,56 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.9.1 — 2026-09-12
+
+Incremental paint for desktop UI hover (menu row highlight vs full-surface
+redraw). Aligns with Qt/KDE dirty-rect / swap-with-damage expectations.
+
+### Added
+
+- `Context.ClipDeviceRect` / `Context.ClipToDamage` — apply a dirty union
+  as a device-space scissor so a hover cannot walk the full pixmap
+- `Context.ClearRect` / `Image.ClearRect` / `CPUDevice.ClearRect` /
+  `GPUDevice.ClearRect` — partial erase (honors clip; `Clear` still
+  resets the whole surface)
+- `Context.Present` / `PresentRects` / `PresentDamage` — GPU swap; when
+  EGL_KHR/EXT_swap_buffers_with_damage is present the compositor gets
+  the dirty boxes
+- Microbenches: `BenchmarkFillRectSmallOnLarge`,
+  `BenchmarkFillRectAASmallOnLarge`, `BenchmarkFillCircleSmallOnLarge`,
+  `BenchmarkDrawLabelWarm`, `BenchmarkMenuHoverCPU`
+
+### Changed
+
+- CPU AA / path fill intersects the clip with the geometry AABB (+1 px
+  AA pad). A translucent menu row on a 1920×1080 surface no longer
+  scans every clip row
+- `CoverageRow` / `RectCoverage` clear and clamp only the clip X span
+- GPU `Fill` of an axis-aligned solid/gradient rect skips stencil-and-cover
+  (colored quad; tess cache is not touched)
+- `DrawPath` / `DrawGlyphs` skip geometry that `QuickReject`s the clip
+- `DrawLabel` reuses a shaped `GlyphRun` on the Context (warm 0-alloc)
+- Clip-path mask and GPU mask upload reuse scratch buffers
+- 1:1 nearest blit skips `maskAt` when there is no path mask
+
+### uitoolkit
+
+Module **v0.9.1**. After recording invalidations:
+
+```go
+ctx.SetDamage(&dirty)
+ctx.Save()
+ctx.ClipToDamage()
+ctx.ClearRect(row, bg)      // not ctx.Clear
+ctx.DrawRect(row, highlight)
+ctx.DrawLabel(title, atlas, origin, paint)
+ctx.Restore()
+_ = ctx.PresentDamage()
+```
+
+Do not call `Clear` on hover. `Device` is unchanged; the new methods are
+optional type assertions.
+
 ## 0.9.0 — 2026-09-11
 
 Retained scene graph. Widgets record once; the compositor replays and

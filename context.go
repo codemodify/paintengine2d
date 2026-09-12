@@ -18,6 +18,14 @@ type Context struct {
 	damage  *Damage
 	// clipScratch is a reusable pixmap for ClipPath coverage.
 	clipScratch *Image
+	// maskScratch is the coverage bytes built by ClipPath before they
+	// are copied into the current clip (so a previous mask can be read).
+	maskScratch []byte
+	// labelRun is the last [NullShaper] result; reused by DrawLabel.
+	labelText  string
+	labelAtlas *FontAtlas
+	labelEpoch uint64
+	labelRun   GlyphRun
 }
 
 type ctxState struct {
@@ -321,8 +329,14 @@ func (c *Context) ClipPathRule(path *Path, rule FillRule) {
 	maskPaint := Fill(White)
 	maskPaint.FillRule = rule
 	tmp.Fill(path, shifted, maskPaint, clip)
-	newMask := make([]byte, bw*bh)
-	for i := 0; i < bw*bh; i++ {
+	need := bw * bh
+	if cap(c.maskScratch) < need {
+		c.maskScratch = make([]byte, need)
+	} else {
+		c.maskScratch = c.maskScratch[:need]
+	}
+	newMask := c.maskScratch
+	for i := 0; i < need; i++ {
 		newMask[i] = maskImg.Pix[i*4+3]
 	}
 	if c.cur.clip.mask != nil {
@@ -334,7 +348,14 @@ func (c *Context) ClipPathRule(path *Path, rule FillRule) {
 			}
 		}
 	}
-	c.cur.clip.mask = newMask
+	dst := c.cur.clip.mask
+	if cap(dst) < need {
+		dst = make([]byte, need)
+	} else {
+		dst = dst[:need]
+	}
+	copy(dst, newMask)
+	c.cur.clip.mask = dst
 	c.cur.clip.maskX, c.cur.clip.maskY = x0, y0
 	c.cur.clip.maskW, c.cur.clip.maskH = bw, bh
 	c.tightenScissorFromMask()
@@ -407,6 +428,95 @@ func (c *Context) SetDamage(d *Damage) { c.damage = d }
 // Damage returns the tracker set by [Context.SetDamage], or nil.
 func (c *Context) Damage() *Damage { return c.damage }
 
+// ClipDeviceRect intersects the current clip with r in device pixels.
+// Unlike [Context.ClipRect], r is not transformed. Use this for a dirty
+// region's scissor (Qt/KDE-style partial update).
+func (c *Context) ClipDeviceRect(r Rect) {
+	r = r.Canon()
+	if r.Empty() || !r.Finite() {
+		c.cur.clip.scissor = Rect{}
+		c.cur.clip.hasScissor = true
+		return
+	}
+	w, h := c.dev.Size()
+	r = r.Intersect(XYWH(0, 0, float32(w), float32(h)))
+	if c.cur.clip.hasScissor {
+		c.cur.clip.scissor = c.cur.clip.scissor.Intersect(r)
+	} else {
+		c.cur.clip.scissor = r
+		c.cur.clip.hasScissor = true
+	}
+}
+
+// ClipToDamage intersects the current clip with the attached [Damage]
+// union. An empty or missing damage list makes the clip empty (nothing
+// to paint). uitoolkit should record invalidations, then ClipToDamage
+// before redrawing so a menu-row hover cannot walk the full surface.
+func (c *Context) ClipToDamage() {
+	if c.damage == nil || c.damage.Empty() {
+		c.cur.clip.scissor = Rect{}
+		c.cur.clip.hasScissor = true
+		return
+	}
+	c.ClipDeviceRect(c.damage.Bounds())
+}
+
+// ClearRect fills r (user space) with col, honoring clip and transform.
+// Unlike [Context.Clear], this is a partial erase: pixels outside r ∩ clip
+// are left untouched. Opaque integer-aligned boxes overwrite (src);
+// otherwise this is a clipped fill.
+func (c *Context) ClearRect(r Rect, col Color) {
+	if r.Empty() || !r.Finite() || !c.cur.xform.Finite() {
+		return
+	}
+	dev := c.cur.xform.TransformRect(r.Canon())
+	if !dev.Finite() {
+		return
+	}
+	if c.cur.clip.hasScissor {
+		dev = dev.Intersect(c.cur.clip.scissor)
+	}
+	if dev.Empty() {
+		return
+	}
+	if clr, ok := c.dev.(interface{ ClearRect(Rect, Color) }); ok && c.cur.clip.mask == nil && c.cur.xform.IsAxisAligned() {
+		clr.ClearRect(dev, col)
+		c.markDirtyUser(r)
+		return
+	}
+	c.DrawRect(r, Fill(col))
+}
+
+// Present flushes the backend (EGL swap on [GPUDevice]; no-op on CPU).
+func (c *Context) Present() error {
+	if p, ok := c.dev.(interface{ Present() error }); ok {
+		return p.Present()
+	}
+	return nil
+}
+
+// PresentRects presents only the given device-space dirty boxes when the
+// backend supports partial swap. A nil or empty list presents the full
+// surface (same as [Context.Present]).
+func (c *Context) PresentRects(rects []Rect) error {
+	if p, ok := c.dev.(interface{ PresentRects([]Rect) error }); ok {
+		return p.PresentRects(rects)
+	}
+	if p, ok := c.dev.(interface{ Present() error }); ok {
+		return p.Present()
+	}
+	return nil
+}
+
+// PresentDamage presents [Damage.Rects] when a tracker is attached and
+// non-empty; otherwise it presents the full surface.
+func (c *Context) PresentDamage() error {
+	if c.damage != nil && !c.damage.Empty() {
+		return c.PresentRects(c.damage.Rects)
+	}
+	return c.Present()
+}
+
 func (c *Context) markDirtyUser(r Rect) {
 	if c.damage == nil || r.Empty() || !r.Finite() || !c.cur.xform.Finite() {
 		return
@@ -436,6 +546,19 @@ func (c *Context) DrawPath(path *Path, paint Paint) {
 	if path == nil || path.Empty() {
 		return
 	}
+	b := path.Bounds()
+	if paint.Style != StyleFill && paint.Stroke.Width > 0 {
+		pad := paint.Stroke.Width
+		if paint.Stroke.Join == JoinMiter && paint.Stroke.MiterLimit > 1 {
+			if m := paint.Stroke.Width * paint.Stroke.MiterLimit * 0.5; m > pad {
+				pad = m
+			}
+		}
+		b = b.Inset(-pad)
+	}
+	if c.QuickReject(b) {
+		return
+	}
 	switch paint.Style {
 	case StyleStroke:
 		c.dev.Stroke(path, c.cur.xform, paint, c.clip())
@@ -446,16 +569,6 @@ func (c *Context) DrawPath(path *Path, paint Paint) {
 		c.dev.Stroke(path, c.cur.xform, paint, c.clip())
 	default:
 		c.dev.Fill(path, c.cur.xform, paint, c.clip())
-	}
-	b := path.Bounds()
-	if paint.Style != StyleFill && paint.Stroke.Width > 0 {
-		pad := paint.Stroke.Width
-		if paint.Stroke.Join == JoinMiter && paint.Stroke.MiterLimit > 1 {
-			if m := paint.Stroke.Width * paint.Stroke.MiterLimit * 0.5; m > pad {
-				pad = m
-			}
-		}
-		b = b.Inset(-pad)
 	}
 	c.markDirtyUser(b)
 }

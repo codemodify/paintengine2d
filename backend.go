@@ -92,11 +92,13 @@ func NewCPUSurfaceSize(w, h int) *CPUSurface {
 	return NewCPUSurface(NewImage(w, h))
 }
 
-func (s *CPUSurface) Size() (w, h int)  { return s.img.Width, s.img.Height }
-func (s *CPUSurface) Device() Device    { return s.dev }
-func (s *CPUSurface) Image() *Image     { return s.img }
-func (s *CPUSurface) Kind() BackendKind { return BackendCPU }
-func (s *CPUSurface) Close() error      { return nil }
+func (s *CPUSurface) Size() (w, h int)          { return s.img.Width, s.img.Height }
+func (s *CPUSurface) Device() Device            { return s.dev }
+func (s *CPUSurface) Image() *Image             { return s.img }
+func (s *CPUSurface) Kind() BackendKind         { return BackendCPU }
+func (s *CPUSurface) Close() error              { return nil }
+func (s *CPUSurface) Present() error            { return nil }
+func (s *CPUSurface) PresentRects([]Rect) error { return nil }
 
 func (s *CPUSurface) Resize(w, h int) error {
 	if w < 1 {

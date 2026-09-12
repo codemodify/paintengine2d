@@ -26,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.9.0
+go get github.com/codemodify/paintengine2d@v0.9.1
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -79,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.9.0 | Notes |
+| Feature | v0.9.1 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -91,12 +91,12 @@ go run ./examples/paths  -o paths.png
 | Clip rect + clip path | **done** | intersect; `ClipPathRule` for even-odd |
 | Image blit nearest + bilinear | **done** | `Paint.Color` RGB-tints premul samples |
 | Wrap existing pixmap (`WrapImage`) | **done** | packed or padded stride |
-| Dirty-rect `Damage` | **done** | widgets **and** decoration redraws |
+| Dirty-rect `Damage` | **done** | `ClipToDamage` / `ClearRect` / `PresentDamage` |
 | Clip queries / `QuickReject` | **done** | framework skip-paint |
-| Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | [NullShaper] + 5×7 atlas; `GlyphRun.Bounds`; no OpenType |
+| Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | warm `DrawLabel` 0-alloc; [NullShaper] + 5×7 atlas |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
-| `GPUDevice` (Linux EGL/GLES2) | **done** | stencil-and-cover; flatten/tess cache; atlas epoch; rect batches |
+| `GPUDevice` (Linux EGL/GLES2) | **done** | AA-rect quad; tess cache; swap-with-damage; rect batches |
 | Retained `Scene` / `Recorder` / `DrawScene` | **done** | group attach + GPU opaque AA rect batch |
 | SIMD / HDR / PDF | deferred | |
 | X11 / Wayland / Win32 windowing | **other repos** | |
@@ -247,6 +247,9 @@ ctx.DrawImageRect(src, srcRect, dstRect)
 ctx.DrawGlyphs(run, origin, paint)
 ctx.Restore()
 ctx.Clear(paintengine2d.Black)             // ignores clip; resets the surface
+ctx.ClearRect(row, bg)                     // dirty-rect erase; honors clip
+ctx.ClipToDamage()                         // scissor to Damage.Bounds
+_ = ctx.PresentDamage()                    // GPU swap-with-damage when available
 ```
 
 `Paint.Style` may be `StyleFill`, `StyleStroke`, or `StyleStrokeAndFill`.
@@ -303,7 +306,11 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 
 | Benchmark | size | time/op | allocs/op |
 | --- | --- | ---: | ---: |
-| `BenchmarkFillRect` | 512² | 0.15 ms | **0** |
+| `BenchmarkFillRect` | 512² | 0.18 ms | **0** |
+| `BenchmarkFillRectSmallOnLarge` | 280×24 on 1920×1080 | 5.3 µs | **0** |
+| `BenchmarkFillRectAASmallOnLarge` | translucent row on 1920×1080 | **32 µs** (was 1.3 ms) | **0** |
+| `BenchmarkFillCircleSmallOnLarge` | r=12 on 1920×1080 | **13 µs** (was 1.3 ms) | **0** |
+| `BenchmarkMenuHoverCPU` | two rows + labels | **15 µs** | **0** |
 | `BenchmarkFillComplexPath` | 512² | 1.25 ms | **0** |
 | `BenchmarkStroke` | 512² blob | 2.37 ms | **0** |
 | `BenchmarkManySmallPaths` | 16×16 circles | 54 ms | 1 (was 257) |
@@ -311,7 +318,8 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 | `BenchmarkStrokeRoundRectUI` | 128×48 | 51 µs | **0** |
 | `BenchmarkImageBlit` | 128→384 bilinear | 3.4 ms | **0** |
 | `BenchmarkImageBlitNearestUI` | 32→32 1:1 | 5.9 µs | **0** |
-| `BenchmarkDrawLabel` | 80×20 | 1.5 µs | 4 |
+| `BenchmarkDrawLabel` | 80×20 | 1.2 µs | **0** (was 4) |
+| `BenchmarkDrawLabelWarm` | same label on 1920×1080 | 2.2 µs | **0** |
 | `BenchmarkChromeCPU` | 640×420 UI chrome | 6.24 ms | 18 |
 | `BenchmarkChromeGPU` | same scene, EGL/llvmpipe | **1.61 ms** | 46 |
 
@@ -340,8 +348,9 @@ dev, err := paintengine2d.NewGPUDeviceEGL(paintengine2d.EGLNative{
 
 `TestFillRectZeroAllocs` and `TestBlitNearest1to1ZeroAllocs` guard the blit
 hot paths. `TestStrokeWarmPathBoundedAllocs` / `TestFillCircleWarmZeroAllocs`
-require warm stroke and circle fill to stay at 0 allocs. First-draw flatten
-and clip-mask builds still allocate.
+/ `TestDrawLabelWarmZeroAllocs` require warm stroke, circle fill, and
+repeated labels to stay at 0 allocs. First-draw flatten and clip-mask
+builds still allocate.
 
 ## Layout
 
@@ -405,7 +414,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.9 (retained scene) |
+| Skia / typical canvas | paintengine2d v0.9.1 (incremental paint) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | Linux EGL/GLES2 `GPUDevice`; no Vulkan/Metal |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
@@ -434,9 +443,9 @@ of this module. Do not grow widgets or windowing here.
 | 3 | Canvas: save/restore, affine xforms, clip rect+path, Clear, FillRect, Fill/Stroke path | **yes** |
 | 4 | Images: DrawImage/DrawImageRect, nearest+bilinear, RGB tint, WrapImage/stride | **yes** |
 | 5 | Text hooks: FontAtlas / GlyphRun / Shaper + tinted bitmap/atlas blit (HarfBuzz later) | **yes** |
-| 6 | Damage: dirty-rect coalescing + QuickReject / clip bounds | **yes** |
+| 6 | Damage: dirty-rect coalescing + ClipToDamage / ClearRect / PresentDamage | **yes** |
 | 7 | Correctness: unit + 37 goldens; fuzz without panic; `CGO_ENABLED=0` green | **yes** |
-| 8 | Perf: benches documented; FillRect, 1:1 nearest blit, warm stroke/path fill are 0-alloc | **yes** |
+| 8 | Perf: small-rect/AA/label benches; FillRect, 1:1 blit, warm stroke/path/label 0-alloc | **yes** |
 | 9 | Docs: layering, feature matrix, limitations, how to verify | **yes** |
 | 10 | API stability notes for a UI kit | **yes** (below) |
 
@@ -460,12 +469,16 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 
 - [Context] canvas: `Save` / `Restore` / `SaveCount`, `Translate` / `Scale` /
   `Rotate` / `SetMatrix` / `Transform`, `ClipRect` / `ClipRoundRect` /
-  `ClipPath` / `ClipPathRule`, `Clear`, `FillRect` / `StrokeRect`, `FillPath` /
+  `ClipPath` / `ClipPathRule` / `ClipDeviceRect` / `ClipToDamage`, `Clear` /
+  `ClearRect`, `FillRect` / `StrokeRect`, `FillPath` /
   `StrokePath` / `DrawPath`, `DrawRect` / `DrawRoundRect` / `DrawOval` /
   `DrawCircle` / `DrawArc` / `DrawLine`
 - Images: `DrawImage` / `DrawImageRect` / `DrawImageRectPaint`
 - Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`,
-  `ClipEmpty`
+  `ClipEmpty`, `ClipDeviceRect`, `ClipToDamage`
+- Present: `Present` / `PresentRects` / `PresentDamage` (GPU swap-with-damage;
+  CPU no-op)
+- Partial erase: `ClearRect` (honors clip). `Clear` still ignores clip.
 - [Device] + [CPUDevice] + [GPUDevice] / [Surface] / [OpenSurface]
 - [Scene] / [Recorder] / [GroupNode] / [DrawScene]
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
@@ -512,6 +525,20 @@ ctx.Restore()
 `Damage.Add` merges overlapping and edge-touching boxes before collapsing
 to a union at `MaxRects`. Do not assume the N+1st dirty widget explodes
 the whole window.
+
+For menu hover, record the previous and next row, then:
+
+```go
+ctx.Save()
+ctx.ClipToDamage()
+ctx.ClearRect(prev, bg)
+ctx.DrawRect(next, highlight)
+ctx.DrawLabel(title, atlas, origin, paint)
+ctx.Restore()
+_ = ctx.PresentDamage()
+```
+
+Do not call `Clear` (full surface) on a hover invalidation.
 
 ## License
 

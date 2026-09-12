@@ -13,6 +13,11 @@ package paintengine2d
 //
 // All geometry is in user space; xform maps user → device pixels.
 // Clip is already in device space.
+//
+// Optional methods (not on this interface, so existing backends stay
+// source-compatible): ClearRect(Rect, Color) for dirty-rect erase;
+// Present() / PresentRects([]Rect) for GPU swap-with-damage. [Context]
+// type-asserts these. See [Context.ClearRect], [Context.PresentDamage].
 type Device interface {
 	// Size is the device pixmap / target size in pixels.
 	Size() (w, h int)
