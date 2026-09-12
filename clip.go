@@ -39,6 +39,19 @@ func (c Clip) intersectScissor(r Rect) Rect {
 	return r.Intersect(c.Scissor)
 }
 
+// IntersectDevice tightens the device-space scissor to r. Used by
+// [DrawSceneDamage] so a dirty replay cannot smear outside the union.
+func (c Clip) IntersectDevice(r Rect) Clip {
+	r = r.Canon()
+	if !c.HasScissor {
+		c.HasScissor = true
+		c.Scissor = r
+		return c
+	}
+	c.Scissor = c.Scissor.Intersect(r)
+	return c
+}
+
 // deviceClip is the mutable clip stack entry stored by Context.
 type deviceClip struct {
 	scissor                    Rect

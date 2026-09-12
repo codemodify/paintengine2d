@@ -6,8 +6,8 @@ import "testing"
 // just the canvas queries and the paint-cycle shape.
 
 func TestVersionIsFoundationReady(t *testing.T) {
-	if Version != "0.9.2" {
-		t.Fatalf("Version %q, want 0.9.2 UI paint sweep", Version)
+	if Version != "0.10.0" {
+		t.Fatalf("Version %q, want 0.10.0 dirty DrawScene / pane layers", Version)
 	}
 }
 

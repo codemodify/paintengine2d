@@ -39,7 +39,10 @@ func GPUAvailable() bool { return gpuAvailable() }
 // [Image.Epoch] bump (or [Image.Touch]) invalidates the texture cache.
 // Axis-aligned rect fills skip stencil-and-cover. [GPUDevice.PresentRects]
 // hints the compositor via eglSwapBuffersWithDamage when the extension
-// exists.
+// exists. When EGL_KHR_partial_update or EGL_BUFFER_PRESERVED is available,
+// only dirty boxes are blitted to the window (not a full FBO copy).
+// [DrawSceneDamage] calls [GPUDevice.SetPresentDamage] so [Present] can
+// swap those boxes without a second rect list.
 
 // NewGPUDevice creates an offscreen GLES framebuffer of w×h device pixels.
 func NewGPUDevice(w, h int) (*GPUDevice, error) { return newGPUDevice(w, h) }
