@@ -57,6 +57,24 @@ func (d *CPUDevice) Present() error { return nil }
 // PresentRects is a no-op on the CPU backend.
 func (d *CPUDevice) PresentRects([]Rect) error { return nil }
 
+// SetImage retargets the device at img, keeping flatten/stroke scratch.
+// [CPUSurface.Resize] uses this so a live [Context] is not left holding a
+// discarded device after a resize storm.
+func (d *CPUDevice) SetImage(img *Image) {
+	if img == nil {
+		panic("paintengine2d: CPUDevice.SetImage(nil)")
+	}
+	d.img = img
+}
+
+// Scroll implements intra-surface memmove for list/document scrolling.
+func (d *CPUDevice) Scroll(dx, dy int, r Rect) {
+	if d.img == nil {
+		return
+	}
+	d.img.Scroll(dx, dy, r)
+}
+
 // Fill implements [Device].
 func (d *CPUDevice) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if path == nil || path.Empty() || d.img.Width == 0 || d.img.Height == 0 || !xform.Finite() {
@@ -476,16 +494,17 @@ func (d *CPUDevice) fillAxisAlignedRect(path *Path, xform Matrix, paint Paint, c
 		r.Min.X == float32(int(r.Min.X)) && r.Min.Y == float32(int(r.Min.Y)) &&
 		r.Max.X == float32(int(r.Max.X)) && r.Max.Y == float32(int(r.Max.Y)) {
 		ix0, iy0, ix1, iy1 := clampPixelBounds(r.Intersect(XYWH(float32(x0), float32(y0), float32(x1-x0), float32(y1-y0))), d.img.Width, d.img.Height)
+		if ix0 >= ix1 || iy0 >= iy1 {
+			return true
+		}
 		pix := d.img.Pix
-		for y := iy0; y < iy1; y++ {
-			i := d.img.pixIndex(ix0, y)
-			for x := ix0; x < ix1; x++ {
-				pix[i+0] = sr
-				pix[i+1] = sg
-				pix[i+2] = sb
-				pix[i+3] = sa
-				i += 4
-			}
+		rowBytes := (ix1 - ix0) * 4
+		i0 := d.img.pixIndex(ix0, iy0)
+		fillRGBA(pix, i0, rowBytes, sr, sg, sb, sa)
+		src := pix[i0 : i0+rowBytes]
+		stride := d.img.RowStride()
+		for y := iy0 + 1; y < iy1; y++ {
+			copy(pix[y*stride+ix0*4:y*stride+ix0*4+rowBytes], src)
 		}
 		return true
 	}

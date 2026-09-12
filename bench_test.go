@@ -282,6 +282,85 @@ func BenchmarkMenuHoverCPU(b *testing.B) {
 	}
 }
 
+func BenchmarkScrollViewport(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	ctx.Clear(RGB(0.12, 0.13, 0.16))
+	view := XYWH(0, 0, 1920, 1080)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.Scroll(0, 24, view)
+	}
+}
+
+func BenchmarkClearLarge(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	c := RGB(0.10, 0.11, 0.14)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.Clear(c)
+	}
+}
+
+func BenchmarkFillRectLargeOpaque(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	p := Fill(RGB(0.16, 0.17, 0.20))
+	r := XYWH(0, 0, 1920, 1080)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.DrawRect(r, p)
+	}
+}
+
+func BenchmarkSaveClipChurn(b *testing.B) {
+	img := NewImage(1920, 1080)
+	ctx := NewContext(img)
+	p := Fill(RGB(0.23, 0.51, 0.93))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.Save()
+		ctx.ClipRect(XYWH(16, float32(80+(i%40)*24), 400, 24))
+		ctx.DrawRect(XYWH(16, float32(80+(i%40)*24), 400, 24), p)
+		ctx.Restore()
+	}
+}
+
+func BenchmarkDrawLabelList(b *testing.B) {
+	img := NewImage(400, 800)
+	ctx := NewContext(img)
+	atlas := NewBitmapAtlas(White)
+	paint := Paint{Color: White, Filter: FilterNearest}
+	labels := []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"}
+	for _, s := range labels {
+		ctx.DrawLabel(s, atlas, Pt(8, 8), paint)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for row, s := range labels {
+			ctx.DrawLabel(s, atlas, Pt(8, float32(8+row*24)), paint)
+		}
+	}
+}
+
+func BenchmarkCopyImageLayer(b *testing.B) {
+	src := NewImage(1920, 200)
+	src.Clear(RGB(0.2, 0.3, 0.4))
+	dst := NewImage(1920, 1080)
+	ctx := NewContext(dst)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx.CopyImage(src, XYWH(0, 0, 1920, 200), Pt(0, 400))
+	}
+}
+
 func blobPath() *Path {
 	p := NewPath()
 	p.MoveTo(80, 260)

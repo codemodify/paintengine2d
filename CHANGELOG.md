@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.9.2 — 2026-09-12
+
+Broader UI paint sweep: scrolling, large fills, clip-stack churn, resize
+storms, glyph cache under rapid scroll, GPU atlas sub-upload.
+
+### Added
+
+- `Image.Scroll` / `Context.Scroll` / `CPUDevice.Scroll` / `GPUDevice.Scroll`
+  — memmove (CPU) or FBO copy (GPU) for list/document wheel ticks
+- `Image.CopyFrom` / `Context.CopyImage` — SRC stamp of a cached layer
+- `Image.TouchRect` / `BumpRect` + `Image.Dirty` — GPU `glTexSubImage2D`
+  of one glyph cell instead of re-uploading the atlas
+- `Context.SyncSize` — reset root clip after `Surface.Resize`
+- `CPUDevice.SetImage` — retarget without dropping flatten/stroke scratch
+- `GPUDevice.SnapshotRect` — cropped read-back
+- Benches: `BenchmarkScrollViewport`, `BenchmarkClearLarge`,
+  `BenchmarkFillRectLargeOpaque`, `BenchmarkSaveClipChurn`,
+  `BenchmarkDrawLabelList`, `BenchmarkCopyImageLayer`
+
+### Changed
+
+- `Image.Clear` / opaque `FillRect` / `ClearRect` fill one row and memcpy
+- `DrawLabel` keeps a 48-entry shaped-run LRU (list scroll hits)
+- `Save` shares clip masks (COW) and skips paint clone when solid / no dash
+- `CPUSurface.Resize` keeps the same `CPUDevice` (live Context stays valid)
+- GPU window surfaces request `EGL_BUFFER_PRESERVED`; `PresentRects` then
+  blits only dirty boxes (full blit if the surface did not preserve)
+
+### uitoolkit
+
+Module **v0.9.2**. Prefer:
+
+```go
+ctx.Scroll(0, dy, view)           // not redraw the whole list
+ctx.ClearRect(exposed, bg)
+// paint only the new strip
+ctx.SyncSize()                    // after Surface.Resize
+atlas.Image.TouchRect(cell)       // after packing one glyph
+_ = ctx.PresentDamage()
+```
+
+Do not `Clear` the full surface on scroll or hover. Do not `Bump()` the
+whole atlas when one cell changed.
+
 ## 0.9.1 — 2026-09-12
 
 Incremental paint for desktop UI hover (menu row highlight vs full-surface

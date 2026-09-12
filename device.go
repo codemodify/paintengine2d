@@ -16,8 +16,10 @@ package paintengine2d
 //
 // Optional methods (not on this interface, so existing backends stay
 // source-compatible): ClearRect(Rect, Color) for dirty-rect erase;
-// Present() / PresentRects([]Rect) for GPU swap-with-damage. [Context]
-// type-asserts these. See [Context.ClearRect], [Context.PresentDamage].
+// Present() / PresentRects([]Rect) for GPU swap-with-damage;
+// Scroll(dx, dy int, r Rect) for intra-surface memmove. [Context]
+// type-asserts these. See [Context.ClearRect], [Context.PresentDamage],
+// [Context.Scroll].
 type Device interface {
 	// Size is the device pixmap / target size in pixels.
 	Size() (w, h int)

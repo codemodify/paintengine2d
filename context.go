@@ -21,11 +21,7 @@ type Context struct {
 	// maskScratch is the coverage bytes built by ClipPath before they
 	// are copied into the current clip (so a previous mask can be read).
 	maskScratch []byte
-	// labelRun is the last [NullShaper] result; reused by DrawLabel.
-	labelText  string
-	labelAtlas *FontAtlas
-	labelEpoch uint64
-	labelRun   GlyphRun
+	labels      labelCache
 }
 
 type ctxState struct {
@@ -77,7 +73,24 @@ func (c *Context) Image() *Image {
 
 // Save pushes transform, clip, and convenience paints.
 func (c *Context) Save() {
+	if c.cur.clip.mask != nil {
+		c.cur.clip.maskShared = true
+	}
 	c.stack = append(c.stack, c.cur.clone())
+}
+
+// SyncSize resets the root clip to the current device size and drops a
+// path mask. Call after [Surface.Resize] so a resize storm does not keep
+// painting into the old scissor. Nested Save stacks are left untouched.
+func (c *Context) SyncSize() {
+	if c.SaveCount() != 0 {
+		return
+	}
+	w, h := c.dev.Size()
+	c.cur.clip = deviceClip{
+		scissor:    XYWH(0, 0, float32(w), float32(h)),
+		hasScissor: true,
+	}
 }
 
 // Restore pops the last [Save]. Extra restores are ignored.
@@ -138,9 +151,16 @@ func (c *Context) QuickReject(r Rect) bool {
 func (s ctxState) clone() ctxState {
 	out := s
 	out.clip = s.clip.clone()
-	out.fill = clonePaint(s.fill)
-	out.stroke = clonePaint(s.stroke)
+	out.fill = clonePaintIfNeeded(s.fill)
+	out.stroke = clonePaintIfNeeded(s.stroke)
 	return out
+}
+
+func clonePaintIfNeeded(p Paint) Paint {
+	if p.Shader == nil && p.Stroke.Dash == nil {
+		return p
+	}
+	return clonePaint(p)
 }
 
 func clonePaint(p Paint) Paint {
@@ -349,13 +369,14 @@ func (c *Context) ClipPathRule(path *Path, rule FillRule) {
 		}
 	}
 	dst := c.cur.clip.mask
-	if cap(dst) < need {
+	if c.cur.clip.maskShared || cap(dst) < need {
 		dst = make([]byte, need)
 	} else {
 		dst = dst[:need]
 	}
 	copy(dst, newMask)
 	c.cur.clip.mask = dst
+	c.cur.clip.maskShared = false
 	c.cur.clip.maskX, c.cur.clip.maskY = x0, y0
 	c.cur.clip.maskW, c.cur.clip.maskH = bw, bh
 	c.tightenScissorFromMask()
@@ -506,6 +527,76 @@ func (c *Context) PresentRects(rects []Rect) error {
 		return p.Present()
 	}
 	return nil
+}
+
+// Scroll shifts pixels inside r (user space) by (dx, dy) user units.
+// Integer axis-aligned translation uses a memmove ([Image.Scroll] / GPU
+// copy). Newly vacated pixels are not cleared — ClearRect the exposed
+// strip. Records damage for r. uitoolkit should Scroll + paint the
+// exposed band instead of redrawing a list on every wheel tick.
+func (c *Context) Scroll(dx, dy float32, r Rect) {
+	r = r.Canon()
+	if r.Empty() || !r.Finite() || !c.cur.xform.Finite() || !c.cur.xform.IsAxisAligned() {
+		return
+	}
+	dev := c.cur.xform.TransformRect(r)
+	if c.cur.clip.hasScissor {
+		dev = dev.Intersect(c.cur.clip.scissor)
+	}
+	w, h := c.dev.Size()
+	dev = dev.Intersect(XYWH(0, 0, float32(w), float32(h)))
+	if dev.Empty() {
+		return
+	}
+	o := c.cur.xform.Transform(Pt(0, 0))
+	p := c.cur.xform.Transform(Pt(dx, dy))
+	ix, okX := nearInt(p.X - o.X)
+	iy, okY := nearInt(p.Y - o.Y)
+	if !okX || !okY || (ix == 0 && iy == 0) {
+		c.markDirtyUser(r)
+		return
+	}
+	if sc, ok := c.dev.(interface{ Scroll(dx, dy int, r Rect) }); ok {
+		sc.Scroll(ix, iy, dev)
+	}
+	c.markDirtyUser(r)
+}
+
+// CopyImage stamps src[srcRect] at dest (user space) with SRC (not src-over).
+// Integer translation + CPU: [Image.CopyFrom]. Otherwise falls back to a
+// nearest blit. For cached layers / scroll backing stores.
+func (c *Context) CopyImage(src *Image, srcRect Rect, dest Point) {
+	if src == nil {
+		return
+	}
+	srcRect = srcRect.Canon()
+	if srcRect.Empty() {
+		srcRect = XYWH(0, 0, float32(src.Width), float32(src.Height))
+	}
+	dst := XYWH(dest.X, dest.Y, srcRect.Dx(), srcRect.Dy())
+	if c.QuickReject(dst) {
+		return
+	}
+	if cpu, ok := c.dev.(*CPUDevice); ok && c.cur.xform.IsTranslation() && c.cur.clip.mask == nil {
+		dx, okX := nearInt(dest.X + c.cur.xform.E)
+		dy, okY := nearInt(dest.Y + c.cur.xform.F)
+		sx, okSX := nearInt(srcRect.Min.X)
+		sy, okSY := nearInt(srcRect.Min.Y)
+		if okX && okY && okSX && okSY {
+			box := XYWH(float32(dx), float32(dy), srcRect.Dx(), srcRect.Dy())
+			if c.cur.clip.hasScissor {
+				box = box.Intersect(c.cur.clip.scissor)
+			}
+			if !box.Empty() {
+				ox := int(box.Min.X) - dx
+				oy := int(box.Min.Y) - dy
+				cpu.img.CopyFrom(src, XYWH(float32(sx+ox), float32(sy+oy), box.Dx(), box.Dy()), int(box.Min.X), int(box.Min.Y))
+				c.markDirtyUser(dst)
+				return
+			}
+		}
+	}
+	c.DrawImageRectPaint(src, srcRect, dst, Paint{Color: White, Filter: FilterNearest})
 }
 
 // PresentDamage presents [Damage.Rects] when a tracker is attached and
