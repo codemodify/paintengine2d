@@ -2,6 +2,58 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.10.0 — 2026-09-12
+
+Dirty `DrawScene`, GPU partial present, and pane-group layer replay —
+the three engine blockers uitoolkit v0.14.0 documented after its dirty-clip
+hover cut.
+
+### Added
+
+- `DrawSceneDamage` / `DrawSceneRects` — replay a [Scene] clipped to dirty
+  device boxes. Recorded `Clear` becomes `ClearRect`. Ops whose bounds miss
+  every dirty rect are skipped. `DrawScene` is the full-surface form.
+- `BakeGroup` / `GroupLocalBounds` / `GroupNode.Layer` / `InvalidateLayer`
+  — bake a pane once; [DrawScene] blits the layer through `Xform` and does
+  not re-walk children (splitter drag). Opaque integer translations
+  `CopyFrom` (memcpy) on CPU.
+- `GPUDevice.SetPresentDamage` — [DrawSceneDamage] stores the dirty list so
+  `Present()` swap-with-damage without a second copy. Empty dirty skips swap.
+- `GPUDevice.PartialUpdate` / `SwapPreserves` — EGL capability queries.
+- `Clip.IntersectDevice` — tighten a device scissor (used by dirty replay).
+- Benches: `BenchmarkDrawSceneFull`, `BenchmarkDrawSceneDamageHover`,
+  `BenchmarkSplitterReraster`, `BenchmarkSplitterLayerBlit`
+
+### Changed
+
+- GPU window configs try `EGL_SWAP_BEHAVIOR_PRESERVED_BIT` first.
+- `PresentRects` scissor-blits dirty boxes when `EGL_BUFFER_PRESERVED` **or**
+  `EGL_KHR_partial_update` (eglSetDamageRegionKHR) is available and buffer
+  age is > 0. Swap still carries damage even when the blit must be full.
+
+### uitoolkit
+
+Module **v0.10.0**. Bump with:
+
+```
+go get github.com/codemodify/paintengine2d@v0.10.0
+```
+
+```go
+DrawSceneDamage(scene, dev, &dirty) // not Clear + DrawScene
+_ = ctx.Present()                   // uses damage from DrawSceneDamage
+// or: _ = ctx.PresentRects(dirty.Rects)  // not raw eglSwapBuffers
+
+BakeGroup(leftPane)
+BakeGroup(rightPane)
+leftPane.Xform = Translation(0, 0)
+rightPane.Xform = Translation(splitX, 0)
+DrawSceneDamage(scene, dev, &dirty)
+```
+
+Do not full-`Clear` on hover. Do not re-record pane children on splitter
+drag — change `Xform` and blit the baked layers.
+
 ## 0.9.2 — 2026-09-12
 
 Broader UI paint sweep: scrolling, large fills, clip-stack churn, resize

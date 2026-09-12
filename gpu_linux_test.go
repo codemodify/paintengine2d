@@ -107,6 +107,42 @@ func TestGPUFillRectSkipsTessCache(t *testing.T) {
 	}
 }
 
+func TestGPUDrawSceneDamageAndPresent(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	rec := NewRecorder(64, 48)
+	ctx := NewContextDevice(rec)
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRect(XYWH(4, 4, 16, 12), Fill(RGB(0.8, 0.2, 0.2)))
+	ctx.DrawRect(XYWH(40, 4, 16, 12), Fill(RGB(0.2, 0.8, 0.3)))
+	scene := rec.Finish()
+
+	dev, err := NewGPUDevice(64, 48)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	var d Damage
+	d.Add(XYWH(4, 4, 16, 12))
+	DrawSceneDamage(scene, dev, &d)
+	img := dev.Snapshot()
+	r, _, _, a := img.PremulAt(8, 8)
+	if a < 200 || r < 180 {
+		t.Fatalf("dirty gpu rect r=%d a=%d", r, a)
+	}
+	_, g, _, a := img.PremulAt(44, 8)
+	if g > 80 {
+		t.Fatalf("clean gpu sibling should stay clear g=%d a=%d", g, a)
+	}
+	dev.SetPresentDamage(d.Rects)
+	if err := dev.Present(); err != nil {
+		t.Fatal(err)
+	}
+	_ = dev.PartialUpdate()
+	_ = dev.SwapPreserves()
+}
+
 func TestGPUClearRectAndPresentRects(t *testing.T) {
 	if !GPUAvailable() {
 		t.Skip("no EGL/GLES")

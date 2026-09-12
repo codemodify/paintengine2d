@@ -26,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.9.2
+go get github.com/codemodify/paintengine2d@v0.10.0
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -79,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.9.2 | Notes |
+| Feature | v0.10.0 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -96,8 +96,8 @@ go run ./examples/paths  -o paths.png
 | Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | warm `DrawLabel` 0-alloc; [NullShaper] + 5×7 atlas |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
-| `GPUDevice` (Linux EGL/GLES2) | **done** | AA-rect quad; tess cache; swap-with-damage; rect batches |
-| Retained `Scene` / `Recorder` / `DrawScene` | **done** | group attach + GPU opaque AA rect batch |
+| `GPUDevice` (Linux EGL/GLES2) | **done** | AA-rect quad; tess cache; swap-with-damage; partial_update blit |
+| Retained `Scene` / `Recorder` / `DrawScene` | **done** | `DrawSceneDamage`; `BakeGroup` layer blit; GPU rect batch |
 | SIMD / HDR / PDF | deferred | |
 | X11 / Wayland / Win32 windowing | **other repos** | |
 | Widgets, IME, a11y, WM policy | **other repos** | |
@@ -197,6 +197,8 @@ flowchart TB
   Linear/radial ramps are 1D textures; images and glyph atlases are textured
   quads keyed on [Image.Epoch]. Clip path masks from `Context` are uploaded
   as coverage textures. `DrawScene` batches opaque axis-aligned rects.
+  `DrawSceneDamage` clips replay to dirty boxes; baked [GroupNode] layers
+  blit through `Xform` (splitter panes).
   `UITK_PAINT=cpu` (or `CGO_ENABLED=0`) keeps the CPU engine. `gpu` requires
   EGL; `auto` (unset) tries GPU and falls back.
 
@@ -419,7 +421,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.9.1 (incremental paint) |
+| Skia / typical canvas | paintengine2d v0.10.0 (dirty DrawScene) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | Linux EGL/GLES2 `GPUDevice`; no Vulkan/Metal |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
@@ -427,7 +429,7 @@ An honest list — this is a CPU paint library, not Skia:
 | Conic / sweep gradients, image shaders | no |
 | Two-circle radial, perspective | simple radial; affine only |
 | Path effects beyond dash | no (no path morph, no discrete) |
-| SaveLayer / offscreen filters | no |
+| SaveLayer / offscreen filters | `BakeGroup` layer blit (no filters) |
 | Color spaces, ICC, HDR, wide gamut | 8-bit sRGB premul |
 | Hairline raster, MSAA, analytic coverage | 8× scanline AA |
 | SIMD / JIT (Blend2D-class) | portable Go |
@@ -481,14 +483,16 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 - Images: `DrawImage` / `DrawImageRect` / `DrawImageRectPaint`
 - Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`,
   `ClipEmpty`, `ClipDeviceRect`, `ClipToDamage`
-- Present: `Present` / `PresentRects` / `PresentDamage` (GPU swap-with-damage;
-  CPU no-op)
+- Present: `Present` / `PresentRects` / `PresentDamage` (GPU swap-with-damage
+  + EGL_KHR_partial_update blit; CPU no-op). `GPUDevice.SetPresentDamage`
+  is filled by [DrawSceneDamage]
 - Partial erase: `ClearRect` (honors clip). `Clear` still ignores clip.
 - Scroll / layer: `Scroll`, `CopyImage`, `Image.Scroll` / `CopyFrom`
 - Atlas: `Image.TouchRect` / `BumpRect` (GPU sub-upload)
 - Resize: `Context.SyncSize`; `CPUSurface.Resize` keeps the same Device
 - [Device] + [CPUDevice] + [GPUDevice] / [Surface] / [OpenSurface]
-- [Scene] / [Recorder] / [GroupNode] / [DrawScene]
+- [Scene] / [Recorder] / [GroupNode] / [DrawScene] / [DrawSceneDamage] /
+  [DrawSceneRects] / [BakeGroup]
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
   stride; padding bytes are never written
 - [Path] verbs, `AddRect` / `AddRoundRect` / `AddEllipse` / `AddCircle` /

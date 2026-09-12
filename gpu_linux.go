@@ -112,11 +112,19 @@ static EGLSurface pe_window_surface(EGLDisplay dpy, EGLConfig cfg, uintptr_t win
 typedef EGLBoolean (*pe_swap_damage_fn)(EGLDisplay, EGLSurface, const EGLint *, EGLint);
 static pe_swap_damage_fn pe_swap_damage;
 
+typedef EGLBoolean (*pe_set_damage_fn)(EGLDisplay, EGLSurface, EGLint *, EGLint);
+static pe_set_damage_fn pe_set_damage;
+
+#ifndef EGL_BUFFER_AGE_KHR
+#define EGL_BUFFER_AGE_KHR 0x313D
+#endif
+
 static void pe_load_ext(void) {
 	pe_swap_damage = (pe_swap_damage_fn)eglGetProcAddress("eglSwapBuffersWithDamageKHR");
 	if (!pe_swap_damage) {
 		pe_swap_damage = (pe_swap_damage_fn)eglGetProcAddress("eglSwapBuffersWithDamageEXT");
 	}
+	pe_set_damage = (pe_set_damage_fn)eglGetProcAddress("eglSetDamageRegionKHR");
 }
 
 static int pe_swap_with_damage(EGLDisplay dpy, EGLSurface surf, EGLint *rects, EGLint n) {
@@ -124,6 +132,21 @@ static int pe_swap_with_damage(EGLDisplay dpy, EGLSurface surf, EGLint *rects, E
 		return pe_swap_damage(dpy, surf, rects, n) == EGL_TRUE;
 	}
 	return eglSwapBuffers(dpy, surf) == EGL_TRUE;
+}
+
+static EGLint pe_buffer_age(EGLDisplay dpy, EGLSurface surf) {
+	EGLint age = 0;
+	if (eglQuerySurface(dpy, surf, EGL_BUFFER_AGE_KHR, &age) == EGL_TRUE) {
+		return age;
+	}
+	return 0;
+}
+
+static int pe_set_damage_region(EGLDisplay dpy, EGLSurface surf, EGLint *rects, EGLint n) {
+	if (!pe_set_damage || !rects || n <= 0) {
+		return 0;
+	}
+	return pe_set_damage(dpy, surf, rects, n) == EGL_TRUE;
 }
 
 static int pe_compile(GLuint *outProg) {
@@ -157,6 +180,7 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"github.com/codemodify/paintengine2d/internal/raster"
@@ -191,6 +215,11 @@ type GPUDevice struct {
 	ownEGL             bool
 	closed             bool
 	preserve           bool
+	partial            bool
+	bufferAge          bool
+	presentSet         bool
+	presentSkip        bool
+	presentRects       []Rect
 	info               string
 	scrollTex          C.GLuint
 	scrollTW, scrollTH int
@@ -323,6 +352,11 @@ func initGPU(n EGLNative, window bool) (*GPUDevice, error) {
 		return nil, fmt.Errorf("%w: eglInitialize 0x%x", ErrGPUUnavailable, C.eglGetError())
 	}
 	C.pe_load_ext()
+	if ext := C.eglQueryString(d.dpy, C.EGL_EXTENSIONS); ext != nil {
+		s := C.GoString(ext)
+		d.partial = strings.Contains(s, "EGL_KHR_partial_update")
+		d.bufferAge = d.partial || strings.Contains(s, "EGL_EXT_buffer_age")
+	}
 	C.eglBindAPI(C.EGL_OPENGL_ES_API)
 
 	// Opaque window configs (ALPHA 0) avoid the transparent-window bug.
@@ -330,7 +364,9 @@ func initGPU(n EGLNative, window bool) (*GPUDevice, error) {
 	type cfgTry struct{ attr []C.EGLint }
 	var tries []cfgTry
 	if window {
+		preserved := C.EGLint(C.EGL_WINDOW_BIT | C.EGL_SWAP_BEHAVIOR_PRESERVED_BIT)
 		tries = []cfgTry{
+			{[]C.EGLint{C.EGL_RENDERABLE_TYPE, C.EGL_OPENGL_ES2_BIT, C.EGL_SURFACE_TYPE, preserved, C.EGL_RED_SIZE, 8, C.EGL_GREEN_SIZE, 8, C.EGL_BLUE_SIZE, 8, C.EGL_ALPHA_SIZE, 0, C.EGL_STENCIL_SIZE, 8, C.EGL_NONE}},
 			{[]C.EGLint{C.EGL_RENDERABLE_TYPE, C.EGL_OPENGL_ES2_BIT, C.EGL_SURFACE_TYPE, C.EGL_WINDOW_BIT, C.EGL_RED_SIZE, 8, C.EGL_GREEN_SIZE, 8, C.EGL_BLUE_SIZE, 8, C.EGL_ALPHA_SIZE, 0, C.EGL_STENCIL_SIZE, 8, C.EGL_NONE}},
 			{[]C.EGLint{C.EGL_RENDERABLE_TYPE, C.EGL_OPENGL_ES2_BIT, C.EGL_SURFACE_TYPE, C.EGL_WINDOW_BIT, C.EGL_RED_SIZE, 8, C.EGL_GREEN_SIZE, 8, C.EGL_BLUE_SIZE, 8, C.EGL_STENCIL_SIZE, 8, C.EGL_NONE}},
 			{[]C.EGLint{C.EGL_RENDERABLE_TYPE, C.EGL_OPENGL_ES2_BIT, C.EGL_SURFACE_TYPE, C.EGL_WINDOW_BIT, C.EGL_RED_SIZE, 8, C.EGL_GREEN_SIZE, 8, C.EGL_BLUE_SIZE, 8, C.EGL_NONE}},
@@ -567,6 +603,9 @@ func (d *GPUDevice) Resize(w, h int) error {
 		return err
 	}
 	d.w, d.h = w, h
+	d.presentSet = false
+	d.presentSkip = false
+	d.presentRects = d.presentRects[:0]
 	return d.allocTarget()
 }
 
@@ -863,24 +902,76 @@ func (d *GPUDevice) ensureScrollTex(w, h int) bool {
 	return true
 }
 
-func (d *GPUDevice) Present() error { return d.PresentRects(nil) }
+func (d *GPUDevice) Present() error {
+	if d == nil || d.closed {
+		return ErrGPUUnavailable
+	}
+	if d.presentSkip {
+		d.presentSkip = false
+		d.presentSet = false
+		return nil
+	}
+	if d.presentSet {
+		rects := d.presentRects
+		d.presentSet = false
+		return d.PresentRects(rects)
+	}
+	return d.PresentRects(nil)
+}
+
+// SetPresentDamage stores rects for the next [GPUDevice.Present].
+// nil means a full-surface present. A non-nil empty list skips the swap
+// ([DrawSceneDamage] with an empty dirty tracker).
+func (d *GPUDevice) SetPresentDamage(rects []Rect) {
+	if d == nil {
+		return
+	}
+	d.presentSet = true
+	d.presentSkip = rects != nil && len(rects) == 0
+	d.presentRects = d.presentRects[:0]
+	if len(rects) > 0 {
+		d.presentRects = append(d.presentRects, rects...)
+	}
+}
+
+// PartialUpdate reports EGL_KHR_partial_update (eglSetDamageRegionKHR).
+func (d *GPUDevice) PartialUpdate() bool { return d != nil && d.partial }
+
+// SwapPreserves reports that the window surface kept EGL_BUFFER_PRESERVED.
+func (d *GPUDevice) SwapPreserves() bool { return d != nil && d.preserve }
 
 // PresentRects blits the FBO to the window and swaps. A nil/empty list is a
 // full-surface present. Non-empty rects are passed to
 // eglSwapBuffersWithDamageKHR/EXT when available so the compositor can
-// skip clean tiles (KDE/Qt partial update). When the window surface
-// preserved the back buffer (EGL_BUFFER_PRESERVED), only dirty rects
-// are blitted; otherwise the FBO is copied in full.
+// skip clean tiles (KDE/Qt partial update).
+//
+// The FBO→window blit is scissored to dirty boxes when either the
+// surface preserved the back buffer (EGL_BUFFER_PRESERVED) or
+// EGL_KHR_partial_update is present and buffer age is > 0. Otherwise
+// the blit is full (undefined back buffer) but the swap still carries
+// the damage hint.
 func (d *GPUDevice) PresentRects(rects []Rect) error {
 	if d == nil || d.closed {
 		return ErrGPUUnavailable
 	}
+	d.presentSet = false
+	d.presentSkip = false
 	if err := d.MakeCurrent(); err != nil {
 		return err
 	}
 	if !d.window || d.surf == nil || d.surf == C.EGLSurface(C.EGL_NO_SURFACE) {
 		C.glFlush()
 		return nil
+	}
+	n := d.packEGLDamage(rects)
+	partialBlit := n > 0 && (d.preserve || d.partial)
+	if partialBlit && d.partial && !d.preserve {
+		if int(C.pe_buffer_age(d.dpy, d.surf)) == 0 {
+			partialBlit = false
+		}
+	}
+	if partialBlit && d.partial {
+		C.pe_set_damage_region(d.dpy, d.surf, &d.eglDamage[0], C.EGLint(n/4))
 	}
 	// Blit FBO to the window (opaque: force alpha in the default FB).
 	C.glBindFramebuffer(C.GL_FRAMEBUFFER, 0)
@@ -896,28 +987,8 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 	C.glActiveTexture(C.GL_TEXTURE0)
 	C.glBindTexture(C.GL_TEXTURE_2D, d.color)
 	C.glUniform1i(d.locTex, 0)
-	if d.preserve && len(rects) > 0 {
-		fw, fh := float32(d.w), float32(d.h)
-		for _, r := range rects {
-			x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
-			if x0 >= x1 || y0 >= y1 {
-				continue
-			}
-			C.glEnable(C.GL_SCISSOR_TEST)
-			C.glScissor(C.GLint(x0), C.GLint(d.h-y1), C.GLsizei(x1-x0), C.GLsizei(y1-y0))
-			u0, u1 := float32(x0)/fw, float32(x1)/fw
-			v0, v1 := 1-float32(y0)/fh, 1-float32(y1)/fh
-			d.quad = append(d.quad[:0],
-				float32(x0), float32(y0), u0, v0,
-				float32(x1), float32(y0), u1, v0,
-				float32(x1), float32(y1), u1, v1,
-				float32(x0), float32(y0), u0, v0,
-				float32(x1), float32(y1), u1, v1,
-				float32(x0), float32(y1), u0, v1,
-			)
-			d.drawTris(d.quad)
-		}
-		C.glDisable(C.GL_SCISSOR_TEST)
+	if partialBlit {
+		d.blitDamageRects(rects)
 	} else {
 		d.quad = append(d.quad[:0],
 			0, 0, 0, 1,
@@ -931,35 +1002,65 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 	}
 	C.glEnable(C.GL_BLEND)
 	C.glEnable(C.GL_STENCIL_TEST)
-	if !d.swap(rects) {
+	if !d.swapPacked(n) {
 		return fmt.Errorf("paintengine2d: eglSwapBuffers 0x%x", C.eglGetError())
 	}
 	C.glBindFramebuffer(C.GL_FRAMEBUFFER, d.fbo)
 	return nil
 }
 
-func (d *GPUDevice) swap(rects []Rect) bool {
-	n := 0
-	if len(rects) > 0 {
-		need := len(rects) * 4
-		if cap(d.eglDamage) < need {
-			d.eglDamage = make([]C.EGLint, need)
-		} else {
-			d.eglDamage = d.eglDamage[:need]
+func (d *GPUDevice) blitDamageRects(rects []Rect) {
+	fw, fh := float32(d.w), float32(d.h)
+	for _, r := range rects {
+		x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
+		if x0 >= x1 || y0 >= y1 {
+			continue
 		}
-		for _, r := range rects {
-			x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
-			if x0 >= x1 || y0 >= y1 {
-				continue
-			}
-			// EGL damage origin is bottom-left.
-			d.eglDamage[n+0] = C.EGLint(x0)
-			d.eglDamage[n+1] = C.EGLint(d.h - y1)
-			d.eglDamage[n+2] = C.EGLint(x1 - x0)
-			d.eglDamage[n+3] = C.EGLint(y1 - y0)
-			n += 4
-		}
+		C.glEnable(C.GL_SCISSOR_TEST)
+		C.glScissor(C.GLint(x0), C.GLint(d.h-y1), C.GLsizei(x1-x0), C.GLsizei(y1-y0))
+		u0, u1 := float32(x0)/fw, float32(x1)/fw
+		v0, v1 := 1-float32(y0)/fh, 1-float32(y1)/fh
+		d.quad = append(d.quad[:0],
+			float32(x0), float32(y0), u0, v0,
+			float32(x1), float32(y0), u1, v0,
+			float32(x1), float32(y1), u1, v1,
+			float32(x0), float32(y0), u0, v0,
+			float32(x1), float32(y1), u1, v1,
+			float32(x0), float32(y1), u0, v1,
+		)
+		d.drawTris(d.quad)
 	}
+	C.glDisable(C.GL_SCISSOR_TEST)
+}
+
+func (d *GPUDevice) packEGLDamage(rects []Rect) int {
+	if len(rects) == 0 {
+		return 0
+	}
+	need := len(rects) * 4
+	if cap(d.eglDamage) < need {
+		d.eglDamage = make([]C.EGLint, need)
+	} else {
+		d.eglDamage = d.eglDamage[:need]
+	}
+	n := 0
+	for _, r := range rects {
+		x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
+		if x0 >= x1 || y0 >= y1 {
+			continue
+		}
+		// EGL damage origin is bottom-left.
+		d.eglDamage[n+0] = C.EGLint(x0)
+		d.eglDamage[n+1] = C.EGLint(d.h - y1)
+		d.eglDamage[n+2] = C.EGLint(x1 - x0)
+		d.eglDamage[n+3] = C.EGLint(y1 - y0)
+		n += 4
+	}
+	d.eglDamage = d.eglDamage[:n]
+	return n
+}
+
+func (d *GPUDevice) swapPacked(n int) bool {
 	if n == 0 {
 		return C.eglSwapBuffers(d.dpy, d.surf) != C.EGL_FALSE
 	}

@@ -49,6 +49,8 @@
 //
 // # UI subset
 //
+// v0.10.0 adds [DrawSceneDamage] (dirty replay), [BakeGroup] (pane layer
+// blit), and GPU partial present (EGL_KHR_partial_update / swap-with-damage).
 // v0.9.2 adds Scroll/CopyImage, label LRU, clip COW, in-place resize,
 // and GPU atlas TouchRect. v0.9.1 tightens incremental paints (geometry∩clip, ClipToDamage,
 // ClearRect, PresentDamage, warm DrawLabel). v0.9.0 adds a retained
@@ -72,7 +74,8 @@
 //	clipRect / clipPath        →  [Context.ClipRect] / [Context.ClipPath]
 //	drawImageRect              →  [Context.DrawImageRect]
 //	SkTextBlob                 →  [GlyphRun] + [Shaper] (hook only)
-//	SkPicture / replay         →  [Scene] / [Recorder] / [DrawScene]
+//	SkPicture / replay         →  [Scene] / [Recorder] / [DrawScene] / [DrawSceneDamage]
+//	SaveLayer / picture blit   →  [BakeGroup] + [GroupNode.Xform]
 //
 // # Performance contracts
 //

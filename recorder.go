@@ -46,6 +46,8 @@ func (r *Recorder) add(n Node) {
 
 // BeginGroup opens a named transform root. The returned node is filled
 // until [Recorder.EndGroup] and can be cached for a later [Recorder.Attach].
+// Call [BakeGroup] on a pane after recording so [DrawScene] blits it
+// through [GroupNode.Xform] instead of re-rasterizing children.
 func (r *Recorder) BeginGroup(id uint64, xform Matrix) *GroupNode {
 	if r == nil {
 		return nil

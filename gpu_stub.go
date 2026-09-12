@@ -42,6 +42,9 @@ func (d *GPUDevice) Image() *Image             { return nil }
 func (d *GPUDevice) Snapshot() *Image          { return nil }
 func (d *GPUDevice) Present() error            { return ErrGPUUnavailable }
 func (d *GPUDevice) PresentRects([]Rect) error { return ErrGPUUnavailable }
+func (d *GPUDevice) SetPresentDamage([]Rect)   {}
+func (d *GPUDevice) PartialUpdate() bool       { return false }
+func (d *GPUDevice) SwapPreserves() bool       { return false }
 func (d *GPUDevice) ClearRect(r Rect, c Color) { _, _ = r, c }
 func (d *GPUDevice) Scroll(dx, dy int, r Rect) { _, _, _ = dx, dy, r }
 func (d *GPUDevice) SnapshotRect(r Rect) *Image {
