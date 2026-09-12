@@ -49,7 +49,8 @@
 //
 // # UI subset
 //
-// v0.9.1 tightens incremental paints (geometry∩clip, ClipToDamage,
+// v0.9.2 adds Scroll/CopyImage, label LRU, clip COW, in-place resize,
+// and GPU atlas TouchRect. v0.9.1 tightens incremental paints (geometry∩clip, ClipToDamage,
 // ClearRect, PresentDamage, warm DrawLabel). v0.9.0 adds a retained
 // [Scene] ([Recorder], [DrawScene]); the GPU batches opaque axis-aligned
 // rects. v0.8.1 caches GPU flatten/tessellation
@@ -78,7 +79,8 @@
 // Opaque integer-aligned [Context.FillRect] is allocation-free.
 // Integer 1:1 nearest blit is allocation-free.
 // Warm path fill and stroke reuse flatten / stroke-pool scratch (0 allocs).
-// Warm [Context.DrawLabel] of an identical string is allocation-free.
+// Warm [Context.DrawLabel] of a cached string (48-entry LRU) is allocation-free.
+// [Context.Scroll] is a memmove; do not redraw a list on every wheel tick.
 // AA / path fills rasterize only geometry ∩ clip (plus a 1 px AA pad).
 // [Context.ClipPath] rasterizes only the path's device-space bounds.
 // Non-finite coordinates and matrices are ignored (no panic).

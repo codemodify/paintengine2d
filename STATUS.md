@@ -1,13 +1,13 @@
 # Overnight status — 2026-09-12
 
-Incremental paint: tight dirty rects, label reuse, GPU rect quad +
-swap-with-damage. CPU remains the fallback.
+UI paint sweep: scroll memmove, large fills, clip COW, resize in-place,
+label LRU, GPU atlas sub-upload. CPU remains the fallback.
 
 ## Tip
 
 - Branch: `dev`
-- Version: **0.9.1**
-- Prior `dev` tip: v0.9.0 (retained Scene / Recorder)
+- Version: **0.9.2**
+- Prior `dev` tip: v0.9.1 (incremental hover)
 
 ## Enable GPU
 
@@ -25,13 +25,17 @@ UITK_PAINT=cpu    # force CPU (CGO_ENABLED=0 tests)
 - Circle r=12 on 1920×1080: **1.3 ms → 13 µs** (~100×)
 - Menu hover (two rows + labels): **15 µs, 0 alloc**
 - Warm DrawLabel: **0 alloc**
+- Scroll 1920×1080: **0.27 ms, 0 alloc**
+- Save/ClipRect/Fill churn: **1.4 µs, 0 alloc**
+- Cached 8-label list: **11 µs, 0 alloc**
 
 ## Added this wave
 
-- Tight CPU paint bounds (geometry ∩ clip) for AA rects and paths
-- `ClipToDamage` / `ClearRect` / `PresentDamage` for uitoolkit hover
-- GPU FillRect skips stencil; `eglSwapBuffersWithDamage` when available
-- Warm `DrawLabel` 0-alloc; glyph skip outside clip
+- `Scroll` / `CopyImage` for list wheel ticks
+- Row-memcpy Clear / opaque FillRect
+- 48-entry DrawLabel LRU; Save COW clip masks
+- `CPUSurface.Resize` keeps Device; `Context.SyncSize`
+- GPU `TouchRect` sub-upload; preserved-buffer PresentRects
 
 ## Hygiene
 

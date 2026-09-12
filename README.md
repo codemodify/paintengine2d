@@ -26,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.9.1
+go get github.com/codemodify/paintengine2d@v0.9.2
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -79,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.9.1 | Notes |
+| Feature | v0.9.2 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -311,6 +311,11 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 | `BenchmarkFillRectAASmallOnLarge` | translucent row on 1920×1080 | **32 µs** (was 1.3 ms) | **0** |
 | `BenchmarkFillCircleSmallOnLarge` | r=12 on 1920×1080 | **13 µs** (was 1.3 ms) | **0** |
 | `BenchmarkMenuHoverCPU` | two rows + labels | **15 µs** | **0** |
+| `BenchmarkScrollViewport` | 1920×1080 memmove | 0.27 ms | **0** |
+| `BenchmarkClearLarge` | 1920×1080 | 0.28 ms | **0** |
+| `BenchmarkCopyImageLayer` | 1920×200 stamp | 81 µs | **0** |
+| `BenchmarkDrawLabelList` | 8 cached labels | 11 µs | **0** |
+| `BenchmarkSaveClipChurn` | Save/ClipRect/Fill | 1.4 µs | **0** |
 | `BenchmarkFillComplexPath` | 512² | 1.25 ms | **0** |
 | `BenchmarkStroke` | 512² blob | 2.37 ms | **0** |
 | `BenchmarkManySmallPaths` | 16×16 circles | 54 ms | 1 (was 257) |
@@ -479,6 +484,9 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 - Present: `Present` / `PresentRects` / `PresentDamage` (GPU swap-with-damage;
   CPU no-op)
 - Partial erase: `ClearRect` (honors clip). `Clear` still ignores clip.
+- Scroll / layer: `Scroll`, `CopyImage`, `Image.Scroll` / `CopyFrom`
+- Atlas: `Image.TouchRect` / `BumpRect` (GPU sub-upload)
+- Resize: `Context.SyncSize`; `CPUSurface.Resize` keeps the same Device
 - [Device] + [CPUDevice] + [GPUDevice] / [Surface] / [OpenSurface]
 - [Scene] / [Recorder] / [GroupNode] / [DrawScene]
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
@@ -525,6 +533,19 @@ ctx.Restore()
 `Damage.Add` merges overlapping and edge-touching boxes before collapsing
 to a union at `MaxRects`. Do not assume the N+1st dirty widget explodes
 the whole window.
+
+For **scroll**, shift pixels then paint only the exposed strip:
+
+```go
+ctx.Scroll(0, dy, view)
+ctx.ClearRect(exposed, bg)
+// paint newly visible rows only
+_ = ctx.PresentDamage()
+```
+
+After `Surface.Resize`, call `ctx.SyncSize()` (or a new Context). After
+packing one glyph into an atlas, `atlas.Image.TouchRect(cell)` — do not
+`Bump()` the whole sheet on every cell.
 
 For menu hover, record the previous and next row, then:
 

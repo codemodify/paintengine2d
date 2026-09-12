@@ -161,29 +161,48 @@ func (c *Context) DrawGlyphs(run GlyphRun, origin Point, paint Paint) {
 	c.markDirtyUser(dirty)
 }
 
-// DrawLabel shapes text with [NullShaper] and draws it. Repeated identical
-// labels (menu rows) reuse a shaped [GlyphRun] on this Context — warm path
-// is allocation-free. For production UI text, call a real [Shaper] and
-// [Context.DrawGlyphs].
+// DrawLabel shapes text with [NullShaper] and draws it. A 48-entry LRU on
+// this Context reuses shaped runs (list scroll / repeated menu labels).
+// Warm hits are allocation-free. For production UI text, call a real
+// [Shaper] and [Context.DrawGlyphs].
 func (c *Context) DrawLabel(text string, atlas *FontAtlas, origin Point, paint Paint) {
-	c.DrawGlyphs(c.shapeLabel(text, atlas), origin, paint)
+	c.DrawGlyphs(c.labels.shape(text, atlas), origin, paint)
 }
 
-func (c *Context) shapeLabel(text string, atlas *FontAtlas) GlyphRun {
+// labelCacheCap is enough for a visible list page under rapid scroll.
+const labelCacheCap = 48
+
+type labelCache struct {
+	entries [labelCacheCap]shapedLabel
+	next    int
+}
+
+type shapedLabel struct {
+	text   string
+	atlas  *FontAtlas
+	epoch  uint64
+	glyphs []Glyph
+}
+
+func (c *labelCache) shape(text string, atlas *FontAtlas) GlyphRun {
 	var epoch uint64
 	if atlas != nil {
 		epoch = atlas.Epoch()
 	}
-	if c.labelText == text && c.labelAtlas == atlas && c.labelEpoch == epoch && c.labelRun.Atlas == atlas {
-		return c.labelRun
+	for i := range c.entries {
+		e := &c.entries[i]
+		if e.text == text && e.atlas == atlas && e.epoch == epoch {
+			return GlyphRun{Atlas: atlas, Glyphs: e.glyphs}
+		}
 	}
-	c.labelText = text
-	c.labelAtlas = atlas
-	c.labelEpoch = epoch
-	c.labelRun.Atlas = atlas
-	c.labelRun.Glyphs = c.labelRun.Glyphs[:0]
+	e := &c.entries[c.next]
+	c.next = (c.next + 1) % labelCacheCap
+	e.text = text
+	e.atlas = atlas
+	e.epoch = epoch
+	e.glyphs = e.glyphs[:0]
 	if atlas == nil {
-		return c.labelRun
+		return GlyphRun{Atlas: atlas, Glyphs: e.glyphs}
 	}
 	var x float32
 	for _, r := range text {
@@ -192,12 +211,12 @@ func (c *Context) shapeLabel(text string, atlas *FontAtlas) GlyphRun {
 		if !ok {
 			continue
 		}
-		c.labelRun.Glyphs = append(c.labelRun.Glyphs, Glyph{ID: id, X: x, Y: 0})
+		e.glyphs = append(e.glyphs, Glyph{ID: id, X: x, Y: 0})
 		adv := cell.Advance
 		if adv <= 0 {
 			adv = cell.Src.Dx() + 1
 		}
 		x += adv
 	}
-	return c.labelRun
+	return GlyphRun{Atlas: atlas, Glyphs: e.glyphs}
 }

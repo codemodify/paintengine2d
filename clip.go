@@ -45,6 +45,9 @@ type deviceClip struct {
 	hasScissor                 bool
 	mask                       []byte
 	maskX, maskY, maskW, maskH int
+	// maskShared is true when mask is aliased with a saved stack entry.
+	// ClipPath must allocate a new buffer instead of mutating in place.
+	maskShared bool
 }
 
 func (d deviceClip) export() Clip {
@@ -62,7 +65,7 @@ func (d deviceClip) export() Clip {
 func (d deviceClip) clone() deviceClip {
 	out := d
 	if d.mask != nil {
-		out.mask = append([]byte(nil), d.mask...)
+		out.maskShared = true
 	}
 	return out
 }

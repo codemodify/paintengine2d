@@ -28,9 +28,12 @@ type Image struct {
 	Stride int
 	Pix    []byte
 	// Epoch increments when pixels change ([Image.Clear], [Image.SetColor],
-	// [Image.Bump] / [Image.Touch]). [GPUDevice] keys its texture cache on
-	// this so a reused glyph/icon atlas is re-uploaded after an in-place bake.
+	// [Image.Bump] / [Image.Touch] / [Image.TouchRect]). [GPUDevice] keys
+	// its texture cache on this so a reused glyph/icon atlas is re-uploaded
+	// after an in-place bake. [Image.Dirty] is the union of in-place writes
+	// since the last GPU upload (empty means “whole image”).
 	Epoch uint64
+	Dirty Rect
 }
 
 // NewImage allocates a transparent packed w×h pixmap (stride = width*4).
@@ -151,20 +154,41 @@ func (im *Image) SetColor(x, y int, c Color) {
 	im.Pix[i+1] = g
 	im.Pix[i+2] = b
 	im.Pix[i+3] = a
-	im.Epoch++
+	im.TouchRect(XYWH(float32(x), float32(y), 1, 1))
 }
 
 // Touch records that Pix was mutated in place (atlas rebake, shm rewrite).
 // Call this after writing Image.Pix directly so [GPUDevice] drops the stale
 // texture. [Image.Clear] and [Image.SetColor] already bump [Image.Epoch].
 func (im *Image) Touch() {
-	if im != nil {
-		im.Epoch++
+	if im == nil {
+		return
+	}
+	im.Epoch++
+	im.Dirty = XYWH(0, 0, float32(im.Width), float32(im.Height))
+}
+
+// TouchRect records an in-place write to r (glyph/icon pack). [GPUDevice]
+// can glTexSubImage2D just this box instead of re-uploading the atlas.
+func (im *Image) TouchRect(r Rect) {
+	if im == nil {
+		return
+	}
+	im.Epoch++
+	r = r.Canon().Intersect(XYWH(0, 0, float32(im.Width), float32(im.Height)))
+	if im.Dirty.Empty() {
+		im.Dirty = r
+	} else {
+		im.Dirty = im.Dirty.Union(r)
 	}
 }
 
 // Bump is [Image.Touch]. uitoolkit calls this after packing a glyph into Pix.
+// Prefer [Image.TouchRect] when only one cell changed (rapid scroll bake).
 func (im *Image) Bump() { im.Touch() }
+
+// BumpRect is [Image.TouchRect].
+func (im *Image) BumpRect(r Rect) { im.TouchRect(r) }
 
 // Clear fills the entire pixmap with c (premultiplied). Padding bytes
 // beyond each row's pixels are left untouched (surface stride).
@@ -176,18 +200,13 @@ func (im *Image) Clear(c Color) {
 	rowBytes := im.Width * 4
 	stride := im.RowStride()
 	pix := im.Pix
-	for y := 0; y < im.Height; y++ {
-		i := y * stride
-		end := i + rowBytes
-		for i < end {
-			pix[i+0] = r
-			pix[i+1] = g
-			pix[i+2] = b
-			pix[i+3] = a
-			i += 4
-		}
+	fillRGBA(pix, 0, rowBytes, r, g, b, a)
+	row := pix[0:rowBytes]
+	for y := 1; y < im.Height; y++ {
+		copy(pix[y*stride:y*stride+rowBytes], row)
 	}
 	im.Epoch++
+	im.Dirty = XYWH(0, 0, float32(im.Width), float32(im.Height))
 }
 
 // ClearRect fills the pixel box covering r with c (premultiplied).
@@ -207,15 +226,18 @@ func (im *Image) ClearRect(r Rect, c Color) {
 	pr, pg, pb, pa := c.Premul8()
 	stride := im.RowStride()
 	pix := im.Pix
-	for y := y0; y < y1; y++ {
-		i := y*stride + x0*4
-		for x := x0; x < x1; x++ {
-			pix[i+0] = pr
-			pix[i+1] = pg
-			pix[i+2] = pb
-			pix[i+3] = pa
-			i += 4
-		}
+	rowBytes := (x1 - x0) * 4
+	i0 := y0*stride + x0*4
+	fillRGBA(pix, i0, rowBytes, pr, pg, pb, pa)
+	src := pix[i0 : i0+rowBytes]
+	for y := y0 + 1; y < y1; y++ {
+		copy(pix[y*stride+x0*4:y*stride+x0*4+rowBytes], src)
+	}
+	box := XYWH(float32(x0), float32(y0), float32(x1-x0), float32(y1-y0))
+	if im.Dirty.Empty() {
+		im.Dirty = box
+	} else {
+		im.Dirty = im.Dirty.Union(box)
 	}
 	im.Epoch++
 }
@@ -298,4 +320,125 @@ func (im *Image) SubImage(x0, y0, x1, y1 int) *Image {
 		copy(out.Pix[di:di+out.Width*4], im.Pix[si:si+out.Width*4])
 	}
 	return out
+}
+
+// fillRGBA writes n bytes (multiple of 4) of a solid premul pixel starting
+// at pix[start], by writing one pixel and doubling. Used for large Clear
+// and opaque FillRect.
+func fillRGBA(pix []byte, start, n int, r, g, b, a uint8) {
+	if n < 4 || start < 0 || start+n > len(pix) {
+		return
+	}
+	pix[start+0] = r
+	pix[start+1] = g
+	pix[start+2] = b
+	pix[start+3] = a
+	filled := 4
+	end := start + n
+	for filled < n {
+		copied := copy(pix[start+filled:end], pix[start:start+filled])
+		filled += copied
+	}
+}
+
+// Scroll moves pixels inside r by (dx, dy) device pixels (memmove).
+// The destination is clipped to r ∩ image. Vacated pixels are left as-is;
+// the caller [Image.ClearRect]s the exposed strip. Overlap is safe.
+func (im *Image) Scroll(dx, dy int, r Rect) {
+	if im == nil || (dx == 0 && dy == 0) {
+		return
+	}
+	x0, y0, x1, y1 := clampPixelBounds(r.Canon(), im.Width, im.Height)
+	if x0 >= x1 || y0 >= y1 {
+		return
+	}
+	dstX0, dstY0, dstX1, dstY1 := x0, y0, x1, y1
+	if dx > 0 {
+		dstX0 += dx
+	} else {
+		dstX1 += dx
+	}
+	if dy > 0 {
+		dstY0 += dy
+	} else {
+		dstY1 += dy
+	}
+	if dstX0 < x0 {
+		dstX0 = x0
+	}
+	if dstY0 < y0 {
+		dstY0 = y0
+	}
+	if dstX1 > x1 {
+		dstX1 = x1
+	}
+	if dstY1 > y1 {
+		dstY1 = y1
+	}
+	if dstX0 >= dstX1 || dstY0 >= dstY1 {
+		return
+	}
+	w := dstX1 - dstX0
+	h := dstY1 - dstY0
+	srcX0 := dstX0 - dx
+	srcY0 := dstY0 - dy
+	stride := im.RowStride()
+	rowBytes := w * 4
+	pix := im.Pix
+	if dy > 0 {
+		for y := h - 1; y >= 0; y-- {
+			si := (srcY0+y)*stride + srcX0*4
+			di := (dstY0+y)*stride + dstX0*4
+			copy(pix[di:di+rowBytes], pix[si:si+rowBytes])
+		}
+	} else {
+		for y := 0; y < h; y++ {
+			si := (srcY0+y)*stride + srcX0*4
+			di := (dstY0+y)*stride + dstX0*4
+			copy(pix[di:di+rowBytes], pix[si:si+rowBytes])
+		}
+	}
+}
+
+// CopyFrom copies srcRect from src to (destX, destY) using SRC (not src-over).
+// Used to stamp a cached layer. Overlap with src==im is safe via [Image.Scroll].
+func (im *Image) CopyFrom(src *Image, srcRect Rect, destX, destY int) {
+	if im == nil || src == nil {
+		return
+	}
+	if src == im {
+		sx, sy, _, _ := clampPixelBounds(srcRect.Canon(), src.Width, src.Height)
+		im.Scroll(destX-sx, destY-sy, srcRect)
+		return
+	}
+	sx0, sy0, sx1, sy1 := clampPixelBounds(srcRect.Canon(), src.Width, src.Height)
+	if sx0 >= sx1 || sy0 >= sy1 {
+		return
+	}
+	if destX < 0 {
+		sx0 -= destX
+		destX = 0
+	}
+	if destY < 0 {
+		sy0 -= destY
+		destY = 0
+	}
+	w := sx1 - sx0
+	h := sy1 - sy0
+	if destX+w > im.Width {
+		w = im.Width - destX
+	}
+	if destY+h > im.Height {
+		h = im.Height - destY
+	}
+	if w <= 0 || h <= 0 {
+		return
+	}
+	sstride, dstride := src.RowStride(), im.RowStride()
+	rowBytes := w * 4
+	for y := 0; y < h; y++ {
+		si := (sy0+y)*sstride + sx0*4
+		di := (destY+y)*dstride + destX*4
+		copy(im.Pix[di:di+rowBytes], src.Pix[si:si+rowBytes])
+	}
 }

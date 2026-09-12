@@ -132,3 +132,51 @@ func TestGPUClearRectAndPresentRects(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGPUScrollAndSnapshotRect(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	dev, err := NewGPUDevice(48, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	ctx := NewContextDevice(dev)
+	ctx.Clear(RGB(0.10, 0.11, 0.14))
+	ctx.DrawRect(XYWH(0, 0, 48, 10), Fill(RGB(0.9, 0.2, 0.2)))
+	ctx.Scroll(0, 10, XYWH(0, 0, 48, 32))
+	crop := dev.SnapshotRect(XYWH(0, 10, 48, 10))
+	if crop == nil || crop.Width == 0 {
+		t.Fatal("SnapshotRect")
+	}
+	r, _, _, a := crop.PremulAt(8, 4)
+	if a < 180 || r < 160 {
+		t.Fatalf("scrolled GPU band r=%d a=%d", r, a)
+	}
+}
+
+func TestGPUAtlasTouchRectKeepsTex(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	dev, err := NewGPUDevice(32, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	atlas := NewImage(16, 16)
+	atlas.Clear(White)
+	xf := Identity()
+	clip := Clip{}
+	dev.Blit(atlas, XYWH(0, 0, 16, 16), XYWH(0, 0, 16, 16), xf, Paint{Color: White, Filter: FilterNearest}, clip)
+	key := uintptr(unsafe.Pointer(atlas))
+	id1 := dev.texCache[key].id
+	atlas.ClearRect(XYWH(2, 2, 4, 4), RGB(0.2, 0.9, 0.3))
+	atlas.TouchRect(XYWH(2, 2, 4, 4))
+	dev.Blit(atlas, XYWH(0, 0, 16, 16), XYWH(0, 0, 16, 16), xf, Paint{Color: White, Filter: FilterNearest}, clip)
+	id2 := dev.texCache[key].id
+	if id1 != id2 {
+		t.Fatal("TouchRect should sub-upload, not allocate a new texture")
+	}
+}

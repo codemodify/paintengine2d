@@ -187,10 +187,13 @@ type GPUDevice struct {
 	locRad, locInner, locTile, locInv C.GLint
 	locTint                           C.GLint
 
-	window bool
-	ownEGL bool
-	closed bool
-	info   string
+	window             bool
+	ownEGL             bool
+	closed             bool
+	preserve           bool
+	info               string
+	scrollTex          C.GLuint
+	scrollTW, scrollTH int
 
 	pixels    *Image
 	readDirty bool
@@ -370,6 +373,11 @@ func initGPU(n EGLNative, window bool) (*GPUDevice, error) {
 			d.destroyEGL()
 			return nil, fmt.Errorf("%w: eglMakeCurrent window 0x%x", ErrGPUUnavailable, C.eglGetError())
 		}
+		C.eglSurfaceAttrib(d.dpy, d.surf, C.EGL_SWAP_BEHAVIOR, C.EGL_BUFFER_PRESERVED)
+		var beh C.EGLint
+		if C.eglQuerySurface(d.dpy, d.surf, C.EGL_SWAP_BEHAVIOR, &beh) != C.EGL_FALSE {
+			d.preserve = beh == C.EGL_BUFFER_PRESERVED
+		}
 	} else {
 		pb := []C.EGLint{C.EGL_WIDTH, C.EGLint(d.w), C.EGL_HEIGHT, C.EGLint(d.h), C.EGL_NONE}
 		d.surf = C.eglCreatePbufferSurface(d.dpy, d.cfg, &pb[0])
@@ -494,6 +502,11 @@ func (d *GPUDevice) destroyGL() {
 	if d.prog != 0 {
 		C.glDeleteProgram(d.prog)
 		d.prog = 0
+	}
+	if d.scrollTex != 0 {
+		C.glDeleteTextures(1, &d.scrollTex)
+		d.scrollTex = 0
+		d.scrollTW, d.scrollTH = 0, 0
 	}
 	for k, t := range d.texCache {
 		id := t.id
@@ -729,13 +742,135 @@ func (d *GPUDevice) Snapshot() *Image {
 	return d.pixels
 }
 
+// SnapshotRect reads back a device-space box (full snapshot if r is empty).
+func (d *GPUDevice) SnapshotRect(r Rect) *Image {
+	img := d.Snapshot()
+	if img == nil {
+		return nil
+	}
+	r = r.Canon()
+	if r.Empty() {
+		return img
+	}
+	x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
+	if x0 >= x1 || y0 >= y1 {
+		return NewImage(0, 0)
+	}
+	return img.SubImage(x0, y0, x1, y1)
+}
+
+// Scroll copies the FBO region r by (dx, dy) via a scratch texture.
+func (d *GPUDevice) Scroll(dx, dy int, r Rect) {
+	if d == nil || d.closed || (dx == 0 && dy == 0) {
+		return
+	}
+	if err := d.MakeCurrent(); err != nil {
+		return
+	}
+	x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
+	if x0 >= x1 || y0 >= y1 {
+		return
+	}
+	dstX0, dstY0, dstX1, dstY1 := x0, y0, x1, y1
+	if dx > 0 {
+		dstX0 += dx
+	} else {
+		dstX1 += dx
+	}
+	if dy > 0 {
+		dstY0 += dy
+	} else {
+		dstY1 += dy
+	}
+	if dstX0 < x0 {
+		dstX0 = x0
+	}
+	if dstY0 < y0 {
+		dstY0 = y0
+	}
+	if dstX1 > x1 {
+		dstX1 = x1
+	}
+	if dstY1 > y1 {
+		dstY1 = y1
+	}
+	if dstX0 >= dstX1 || dstY0 >= dstY1 {
+		return
+	}
+	sw, sh := dstX1-dstX0, dstY1-dstY0
+	srcX0 := dstX0 - dx
+	srcY0 := dstY0 - dy
+	if !d.ensureScrollTex(sw, sh) {
+		return
+	}
+	C.glBindFramebuffer(C.GL_FRAMEBUFFER, d.fbo)
+	C.glBindTexture(C.GL_TEXTURE_2D, d.scrollTex)
+	// FBO is GL bottom-left; our Y is top-down.
+	C.glCopyTexSubImage2D(C.GL_TEXTURE_2D, 0, 0, 0, C.GLint(srcX0), C.GLint(d.h-srcY0-sh), C.GLsizei(sw), C.GLsizei(sh))
+	C.glDisable(C.GL_STENCIL_TEST)
+	C.glDisable(C.GL_BLEND)
+	C.glEnable(C.GL_SCISSOR_TEST)
+	C.glScissor(C.GLint(dstX0), C.GLint(d.h-dstY1), C.GLsizei(sw), C.GLsizei(sh))
+	C.glUseProgram(d.prog)
+	C.glUniform2f(d.locVP, C.GLfloat(d.w), C.GLfloat(d.h))
+	C.glUniform1i(d.locMode, 3)
+	C.glUniform1i(d.locUseM, 0)
+	C.glUniform4f(d.locTint, 1, 1, 1, 1)
+	C.glActiveTexture(C.GL_TEXTURE0)
+	C.glBindTexture(C.GL_TEXTURE_2D, d.scrollTex)
+	C.glUniform1i(d.locTex, 0)
+	// Copied tex is GL-oriented (Y-up). Draw with v flipped relative to dest.
+	u1 := float32(sw) / float32(d.scrollTW)
+	v1 := float32(sh) / float32(d.scrollTH)
+	d.quad = append(d.quad[:0],
+		float32(dstX0), float32(dstY0), 0, v1,
+		float32(dstX1), float32(dstY0), u1, v1,
+		float32(dstX1), float32(dstY1), u1, 0,
+		float32(dstX0), float32(dstY0), 0, v1,
+		float32(dstX1), float32(dstY1), u1, 0,
+		float32(dstX0), float32(dstY1), 0, 0,
+	)
+	C.glColorMask(C.GL_TRUE, C.GL_TRUE, C.GL_TRUE, C.GL_TRUE)
+	d.drawTris(d.quad)
+	C.glEnable(C.GL_BLEND)
+	C.glEnable(C.GL_STENCIL_TEST)
+	C.glDisable(C.GL_SCISSOR_TEST)
+	d.readDirty = true
+}
+
+func (d *GPUDevice) ensureScrollTex(w, h int) bool {
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	if d.scrollTex != 0 && d.scrollTW >= w && d.scrollTH >= h {
+		return true
+	}
+	if d.scrollTex != 0 {
+		C.glDeleteTextures(1, &d.scrollTex)
+		d.scrollTex = 0
+	}
+	C.glGenTextures(1, &d.scrollTex)
+	C.glBindTexture(C.GL_TEXTURE_2D, d.scrollTex)
+	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_MIN_FILTER, C.GL_NEAREST)
+	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_MAG_FILTER, C.GL_NEAREST)
+	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_WRAP_S, C.GL_CLAMP_TO_EDGE)
+	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_WRAP_T, C.GL_CLAMP_TO_EDGE)
+	C.glTexImage2D(C.GL_TEXTURE_2D, 0, C.GL_RGBA, C.GLsizei(w), C.GLsizei(h), 0, C.GL_RGBA, C.GL_UNSIGNED_BYTE, nil)
+	d.scrollTW, d.scrollTH = w, h
+	return true
+}
+
 func (d *GPUDevice) Present() error { return d.PresentRects(nil) }
 
 // PresentRects blits the FBO to the window and swaps. A nil/empty list is a
 // full-surface present. Non-empty rects are passed to
 // eglSwapBuffersWithDamageKHR/EXT when available so the compositor can
-// skip clean tiles (KDE/Qt partial update). The FBO→window blit stays
-// full-frame because EGL back buffers are not preserved after swap.
+// skip clean tiles (KDE/Qt partial update). When the window surface
+// preserved the back buffer (EGL_BUFFER_PRESERVED), only dirty rects
+// are blitted; otherwise the FBO is copied in full.
 func (d *GPUDevice) PresentRects(rects []Rect) error {
 	if d == nil || d.closed {
 		return ErrGPUUnavailable
@@ -761,15 +896,39 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 	C.glActiveTexture(C.GL_TEXTURE0)
 	C.glBindTexture(C.GL_TEXTURE_2D, d.color)
 	C.glUniform1i(d.locTex, 0)
-	d.quad = append(d.quad[:0],
-		0, 0, 0, 1,
-		float32(d.w), 0, 1, 1,
-		float32(d.w), float32(d.h), 1, 0,
-		0, 0, 0, 1,
-		float32(d.w), float32(d.h), 1, 0,
-		0, float32(d.h), 0, 0,
-	)
-	d.drawTris(d.quad)
+	if d.preserve && len(rects) > 0 {
+		fw, fh := float32(d.w), float32(d.h)
+		for _, r := range rects {
+			x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
+			if x0 >= x1 || y0 >= y1 {
+				continue
+			}
+			C.glEnable(C.GL_SCISSOR_TEST)
+			C.glScissor(C.GLint(x0), C.GLint(d.h-y1), C.GLsizei(x1-x0), C.GLsizei(y1-y0))
+			u0, u1 := float32(x0)/fw, float32(x1)/fw
+			v0, v1 := 1-float32(y0)/fh, 1-float32(y1)/fh
+			d.quad = append(d.quad[:0],
+				float32(x0), float32(y0), u0, v0,
+				float32(x1), float32(y0), u1, v0,
+				float32(x1), float32(y1), u1, v1,
+				float32(x0), float32(y0), u0, v0,
+				float32(x1), float32(y1), u1, v1,
+				float32(x0), float32(y1), u0, v1,
+			)
+			d.drawTris(d.quad)
+		}
+		C.glDisable(C.GL_SCISSOR_TEST)
+	} else {
+		d.quad = append(d.quad[:0],
+			0, 0, 0, 1,
+			float32(d.w), 0, 1, 1,
+			float32(d.w), float32(d.h), 1, 0,
+			0, 0, 0, 1,
+			float32(d.w), float32(d.h), 1, 0,
+			0, float32(d.h), 0, 0,
+		)
+		d.drawTris(d.quad)
+	}
 	C.glEnable(C.GL_BLEND)
 	C.glEnable(C.GL_STENCIL_TEST)
 	if !d.swap(rects) {
@@ -1066,10 +1225,19 @@ func (d *GPUDevice) uploadMask(clip Clip) {
 
 func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 	key := uintptr(unsafe.Pointer(src))
-	if e, ok := d.texCache[key]; ok && e.w == src.Width && e.h == src.Height && e.nbytes == len(src.Pix) && e.epoch == src.Epoch {
-		return e.id
-	}
-	if e, ok := d.texCache[key]; ok {
+	if e, ok := d.texCache[key]; ok && e.w == src.Width && e.h == src.Height && e.nbytes == len(src.Pix) {
+		if e.epoch == src.Epoch {
+			return e.id
+		}
+		if d.uploadDirty(src, e.id) {
+			e.epoch = src.Epoch
+			d.texCache[key] = e
+			return e.id
+		}
+		id := e.id
+		C.glDeleteTextures(1, &id)
+		delete(d.texCache, key)
+	} else if e, ok := d.texCache[key]; ok {
 		id := e.id
 		C.glDeleteTextures(1, &id)
 		delete(d.texCache, key)
@@ -1098,6 +1266,30 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 	C.glTexImage2D(C.GL_TEXTURE_2D, 0, C.GL_RGBA, C.GLsizei(src.Width), C.GLsizei(src.Height), 0, C.GL_RGBA, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&pix[0]))
 	d.texCache[key] = gpuTex{id: id, w: src.Width, h: src.Height, nbytes: len(src.Pix), epoch: src.Epoch}
 	return id
+}
+
+func (d *GPUDevice) uploadDirty(src *Image, id C.GLuint) bool {
+	r := src.Dirty
+	if r.Empty() {
+		r = XYWH(0, 0, float32(src.Width), float32(src.Height))
+	}
+	x0, y0, x1, y1 := clampPixelBounds(r, src.Width, src.Height)
+	if x0 >= x1 || y0 >= y1 {
+		return true
+	}
+	// Full re-upload when the dirty box is most of the atlas.
+	if (x1-x0)*(y1-y0)*4 > len(src.Pix)*3/4 {
+		return false
+	}
+	C.glBindTexture(C.GL_TEXTURE_2D, id)
+	stride := src.RowStride()
+	w := x1 - x0
+	// GLES2 has no UNPACK_ROW_LENGTH — one row at a time.
+	for y := y0; y < y1; y++ {
+		i := y*stride + x0*4
+		C.glTexSubImage2D(C.GL_TEXTURE_2D, 0, C.GLint(x0), C.GLint(y), C.GLsizei(w), 1, C.GL_RGBA, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&src.Pix[i]))
+	}
+	return true
 }
 
 func (d *GPUDevice) drawFan(c []raster.Vec2) {

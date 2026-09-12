@@ -111,7 +111,7 @@ func (s *CPUSurface) Resize(w, h int) error {
 		return nil
 	}
 	s.img = NewImage(w, h)
-	s.dev = NewCPUDevice(s.img)
+	s.dev.SetImage(s.img)
 	return nil
 }
 

@@ -43,10 +43,15 @@ func (d *GPUDevice) Snapshot() *Image          { return nil }
 func (d *GPUDevice) Present() error            { return ErrGPUUnavailable }
 func (d *GPUDevice) PresentRects([]Rect) error { return ErrGPUUnavailable }
 func (d *GPUDevice) ClearRect(r Rect, c Color) { _, _ = r, c }
-func (d *GPUDevice) Resize(w, h int) error     { _, _ = w, h; return ErrGPUUnavailable }
-func (d *GPUDevice) Close() error              { return nil }
-func (d *GPUDevice) MakeCurrent() error        { return ErrGPUUnavailable }
-func (d *GPUDevice) Kind() BackendKind         { return BackendGPU }
+func (d *GPUDevice) Scroll(dx, dy int, r Rect) { _, _, _ = dx, dy, r }
+func (d *GPUDevice) SnapshotRect(r Rect) *Image {
+	_, _ = r, d
+	return nil
+}
+func (d *GPUDevice) Resize(w, h int) error { _, _ = w, h; return ErrGPUUnavailable }
+func (d *GPUDevice) Close() error          { return nil }
+func (d *GPUDevice) MakeCurrent() error    { return ErrGPUUnavailable }
+func (d *GPUDevice) Kind() BackendKind     { return BackendGPU }
 
 func (d *GPUDevice) fillOpaqueRects(rects []Rect, color Color, clip Clip) {
 	_, _, _ = rects, color, clip
