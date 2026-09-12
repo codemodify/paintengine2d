@@ -190,6 +190,36 @@ func (im *Image) Clear(c Color) {
 	im.Epoch++
 }
 
+// ClearRect fills the pixel box covering r with c (premultiplied).
+// Pixels outside r ∩ image bounds, and stride padding, are not written.
+func (im *Image) ClearRect(r Rect, c Color) {
+	if im == nil || len(im.Pix) == 0 || im.Width <= 0 || im.Height <= 0 {
+		return
+	}
+	r = r.Canon()
+	if r.Empty() || !r.Finite() {
+		return
+	}
+	x0, y0, x1, y1 := clampPixelBounds(r, im.Width, im.Height)
+	if x0 >= x1 || y0 >= y1 {
+		return
+	}
+	pr, pg, pb, pa := c.Premul8()
+	stride := im.RowStride()
+	pix := im.Pix
+	for y := y0; y < y1; y++ {
+		i := y*stride + x0*4
+		for x := x0; x < x1; x++ {
+			pix[i+0] = pr
+			pix[i+1] = pg
+			pix[i+2] = pb
+			pix[i+3] = pa
+			i += 4
+		}
+	}
+	im.Epoch++
+}
+
 // Clone returns a packed deep copy of the pixmap.
 func (im *Image) Clone() *Image {
 	if im == nil {

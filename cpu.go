@@ -41,6 +41,22 @@ func (d *CPUDevice) Size() (w, h int) { return d.img.Width, d.img.Height }
 // Clear implements [Device].
 func (d *CPUDevice) Clear(c Color) { d.img.Clear(c) }
 
+// ClearRect overwrites the device-space box r with c (src, not src-over).
+// Used by [Context.ClearRect] for dirty-rect erase. r is intersected with
+// the pixmap; padding bytes past each row are left untouched.
+func (d *CPUDevice) ClearRect(r Rect, c Color) {
+	if d.img == nil {
+		return
+	}
+	d.img.ClearRect(r, c)
+}
+
+// Present is a no-op: the CPU pixmap is already the front buffer.
+func (d *CPUDevice) Present() error { return nil }
+
+// PresentRects is a no-op on the CPU backend.
+func (d *CPUDevice) PresentRects([]Rect) error { return nil }
+
 // Fill implements [Device].
 func (d *CPUDevice) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if path == nil || path.Empty() || d.img.Width == 0 || d.img.Height == 0 || !xform.Finite() {
@@ -225,6 +241,7 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 	sstride := src.RowStride()
 	spix := src.Pix
 	dpix := d.img.Pix
+	useMask := clip.Mask != nil
 	for y := y0; y < y1; y++ {
 		sy := sy0 + (y - dy0)
 		if sy < sy0 || sy >= syMax {
@@ -233,10 +250,13 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 		srow := sy * sstride
 		di := d.img.pixIndex(x0, y)
 		for x := x0; x < x1; x++ {
-			m := clip.maskAt(x, y)
-			if m == 0 {
-				di += 4
-				continue
+			var m uint8 = 255
+			if useMask {
+				m = clip.maskAt(x, y)
+				if m == 0 {
+					di += 4
+					continue
+				}
 			}
 			sx := sx0 + (x - dx0)
 			if sx < sx0 || sx >= sxMax {
@@ -315,6 +335,15 @@ func (d *CPUDevice) rasterFill(paint Paint, xform Matrix, clip Clip, rule int) {
 	if !ok {
 		return
 	}
+	if minX, minY, maxX, maxY, okb := raster.EdgeBounds(d.edges); okb {
+		x0, y0, x1, y1, ok = d.clipBoundsIntersect(clip, Rect{
+			Min: Point{minX, minY},
+			Max: Point{maxX, maxY},
+		})
+		if !ok {
+			return
+		}
+	}
 	solid := paint.Shader == nil
 	var sr, sg, sb, sa uint8
 	if solid {
@@ -331,6 +360,20 @@ func (d *CPUDevice) rasterFill(paint Paint, xform Matrix, clip Clip, rule int) {
 }
 
 func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid bool, sr, sg, sb, sa uint8, paint Paint, xform Matrix) {
+	pix := d.img.Pix
+	if clip.Mask == nil && solid {
+		for x := x0; x < x1; x++ {
+			c := cover[x]
+			if c == 0 {
+				continue
+			}
+			if c > 255 {
+				c = 255
+			}
+			raster.BlendSrcOver(pix, d.img.pixIndex(x, y), sr, sg, sb, sa, uint8(c))
+		}
+		return
+	}
 	for x := x0; x < x1; x++ {
 		c := cover[x]
 		if c == 0 {
@@ -351,7 +394,7 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 		}
 		i := d.img.pixIndex(x, y)
 		if solid {
-			raster.BlendSrcOver(d.img.Pix, i, sr, sg, sb, sa, uint8(c))
+			raster.BlendSrcOver(pix, i, sr, sg, sb, sa, uint8(c))
 			continue
 		}
 		col := paint.Shader.Shade(float32(x)+0.5, float32(y)+0.5, xform)
@@ -359,7 +402,7 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 		if aa == 0 {
 			continue
 		}
-		raster.BlendSrcOver(d.img.Pix, i, rr, gg, bb, aa, uint8(c))
+		raster.BlendSrcOver(pix, i, rr, gg, bb, aa, uint8(c))
 	}
 }
 
@@ -373,6 +416,33 @@ func (d *CPUDevice) clipBounds(clip Clip) (x0, y0, x1, y1 int, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	x0, y0, x1, y1 = clampPixelBounds(scissor, w, h)
+	return x0, y0, x1, y1, x0 < x1 && y0 < y1
+}
+
+// clipBoundsIntersect is [CPUDevice.clipBounds] intersected with a
+// device-space geometry box (plus 1 px for the AA fringe). Small dirty
+// rects on a large pixmap no longer walk every clip row.
+func (d *CPUDevice) clipBoundsIntersect(clip Clip, box Rect) (x0, y0, x1, y1 int, ok bool) {
+	x0, y0, x1, y1, ok = d.clipBounds(clip)
+	if !ok {
+		return
+	}
+	if box.Empty() || !box.Finite() {
+		return x0, y0, x1, y1, true
+	}
+	bx0, by0, bx1, by1 := clampPixelBounds(box.Inset(-1), d.img.Width, d.img.Height)
+	if bx0 > x0 {
+		x0 = bx0
+	}
+	if by0 > y0 {
+		y0 = by0
+	}
+	if bx1 < x1 {
+		x1 = bx1
+	}
+	if by1 < y1 {
+		y1 = by1
+	}
 	return x0, y0, x1, y1, x0 < x1 && y0 < y1
 }
 
@@ -393,7 +463,7 @@ func (d *CPUDevice) fillAxisAlignedRect(path *Path, xform Matrix, paint Paint, c
 	if r.Empty() {
 		return true
 	}
-	x0, y0, x1, y1, ok := d.clipBounds(clip)
+	x0, y0, x1, y1, ok := d.clipBoundsIntersect(clip, r)
 	if !ok {
 		return true
 	}

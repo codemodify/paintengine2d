@@ -135,6 +135,7 @@ func (c *Context) DrawGlyphs(run GlyphRun, origin Point, paint Paint) {
 	if paint.Color == (Color{}) {
 		paint.Color = White
 	}
+	clip := c.clip()
 	var dirty Rect
 	for _, g := range run.Glyphs {
 		cell, ok := run.Atlas.Cell(g.ID)
@@ -147,7 +148,10 @@ func (c *Context) DrawGlyphs(run GlyphRun, origin Point, paint Paint) {
 			cell.Src.Dx(),
 			cell.Src.Dy(),
 		)
-		c.dev.Blit(run.Atlas.Image, cell.Src, dst, c.cur.xform, paint, c.clip())
+		if c.QuickReject(dst) {
+			continue
+		}
+		c.dev.Blit(run.Atlas.Image, cell.Src, dst, c.cur.xform, paint, clip)
 		if dirty.Empty() {
 			dirty = dst
 		} else {
@@ -157,8 +161,43 @@ func (c *Context) DrawGlyphs(run GlyphRun, origin Point, paint Paint) {
 	c.markDirtyUser(dirty)
 }
 
-// DrawLabel shapes text with [NullShaper] and draws it. For production UI
-// text, call a real [Shaper] and [Context.DrawGlyphs].
+// DrawLabel shapes text with [NullShaper] and draws it. Repeated identical
+// labels (menu rows) reuse a shaped [GlyphRun] on this Context — warm path
+// is allocation-free. For production UI text, call a real [Shaper] and
+// [Context.DrawGlyphs].
 func (c *Context) DrawLabel(text string, atlas *FontAtlas, origin Point, paint Paint) {
-	c.DrawGlyphs(NullShaper{}.Shape(text, atlas), origin, paint)
+	c.DrawGlyphs(c.shapeLabel(text, atlas), origin, paint)
+}
+
+func (c *Context) shapeLabel(text string, atlas *FontAtlas) GlyphRun {
+	var epoch uint64
+	if atlas != nil {
+		epoch = atlas.Epoch()
+	}
+	if c.labelText == text && c.labelAtlas == atlas && c.labelEpoch == epoch && c.labelRun.Atlas == atlas {
+		return c.labelRun
+	}
+	c.labelText = text
+	c.labelAtlas = atlas
+	c.labelEpoch = epoch
+	c.labelRun.Atlas = atlas
+	c.labelRun.Glyphs = c.labelRun.Glyphs[:0]
+	if atlas == nil {
+		return c.labelRun
+	}
+	var x float32
+	for _, r := range text {
+		id := GlyphID(r)
+		cell, ok := atlas.Cell(id)
+		if !ok {
+			continue
+		}
+		c.labelRun.Glyphs = append(c.labelRun.Glyphs, Glyph{ID: id, X: x, Y: 0})
+		adv := cell.Advance
+		if adv <= 0 {
+			adv = cell.Src.Dx() + 1
+		}
+		x += adv
+	}
+	return c.labelRun
 }

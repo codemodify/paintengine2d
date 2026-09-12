@@ -109,6 +109,23 @@ static EGLSurface pe_window_surface(EGLDisplay dpy, EGLConfig cfg, uintptr_t win
 	return eglCreateWindowSurface(dpy, cfg, (EGLNativeWindowType)win, NULL);
 }
 
+typedef EGLBoolean (*pe_swap_damage_fn)(EGLDisplay, EGLSurface, const EGLint *, EGLint);
+static pe_swap_damage_fn pe_swap_damage;
+
+static void pe_load_ext(void) {
+	pe_swap_damage = (pe_swap_damage_fn)eglGetProcAddress("eglSwapBuffersWithDamageKHR");
+	if (!pe_swap_damage) {
+		pe_swap_damage = (pe_swap_damage_fn)eglGetProcAddress("eglSwapBuffersWithDamageEXT");
+	}
+}
+
+static int pe_swap_with_damage(EGLDisplay dpy, EGLSurface surf, EGLint *rects, EGLint n) {
+	if (pe_swap_damage && rects && n > 0) {
+		return pe_swap_damage(dpy, surf, rects, n) == EGL_TRUE;
+	}
+	return eglSwapBuffers(dpy, surf) == EGL_TRUE;
+}
+
 static int pe_compile(GLuint *outProg) {
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 	glShaderSource(vs, 1, &pe_vs, NULL);
@@ -178,14 +195,16 @@ type GPUDevice struct {
 	pixels    *Image
 	readDirty bool
 
-	verbs    []raster.Verb
-	pts      []raster.Vec2
-	contours [][]raster.Vec2
-	closedC  []bool
-	outline  [][]raster.Vec2
-	pool     raster.StrokePool
-	verts    []float32
-	quad     []float32
+	verbs     []raster.Verb
+	pts       []raster.Vec2
+	contours  [][]raster.Vec2
+	closedC   []bool
+	outline   [][]raster.Vec2
+	pool      raster.StrokePool
+	verts     []float32
+	quad      []float32
+	maskPix   []byte
+	eglDamage []C.EGLint
 
 	texCache map[uintptr]gpuTex
 	gradRamp [256 * 4]byte
@@ -239,11 +258,13 @@ func newGPUSurface(w, h int) (Surface, error) {
 	return &gpuSurface{dev: d}, nil
 }
 
-func (s *gpuSurface) Size() (w, h int)  { return s.dev.Size() }
-func (s *gpuSurface) Device() Device    { return s.dev }
-func (s *gpuSurface) Image() *Image     { return s.dev.Snapshot() }
-func (s *gpuSurface) Kind() BackendKind { return BackendGPU }
-func (s *gpuSurface) Close() error      { return s.dev.Close() }
+func (s *gpuSurface) Size() (w, h int)            { return s.dev.Size() }
+func (s *gpuSurface) Device() Device              { return s.dev }
+func (s *gpuSurface) Image() *Image               { return s.dev.Snapshot() }
+func (s *gpuSurface) Kind() BackendKind           { return BackendGPU }
+func (s *gpuSurface) Close() error                { return s.dev.Close() }
+func (s *gpuSurface) Present() error              { return s.dev.Present() }
+func (s *gpuSurface) PresentRects(r []Rect) error { return s.dev.PresentRects(r) }
 
 func (s *gpuSurface) Resize(w, h int) error { return s.dev.Resize(w, h) }
 
@@ -298,6 +319,7 @@ func initGPU(n EGLNative, window bool) (*GPUDevice, error) {
 	if C.eglInitialize(d.dpy, &maj, &min) == C.EGL_FALSE {
 		return nil, fmt.Errorf("%w: eglInitialize 0x%x", ErrGPUUnavailable, C.eglGetError())
 	}
+	C.pe_load_ext()
 	C.eglBindAPI(C.EGL_OPENGL_ES_API)
 
 	// Opaque window configs (ALPHA 0) avoid the transparent-window bug.
@@ -562,11 +584,34 @@ func (d *GPUDevice) Clear(c Color) {
 	d.readDirty = true
 }
 
+// ClearRect overwrites the device-space box r (scissored glClear).
+func (d *GPUDevice) ClearRect(r Rect, c Color) {
+	if d == nil || d.closed {
+		return
+	}
+	if err := d.MakeCurrent(); err != nil {
+		return
+	}
+	if !d.applyClip(Clip{HasScissor: true, Scissor: r}, r) {
+		return
+	}
+	cr, cg, cb, ca := c.Premul8()
+	C.glColorMask(C.GL_TRUE, C.GL_TRUE, C.GL_TRUE, C.GL_TRUE)
+	C.glClearColor(C.GLfloat(cr)/255, C.GLfloat(cg)/255, C.GLfloat(cb)/255, C.GLfloat(ca)/255)
+	C.glClearStencil(0)
+	C.glClear(C.GL_COLOR_BUFFER_BIT | C.GL_STENCIL_BUFFER_BIT)
+	C.glDisable(C.GL_SCISSOR_TEST)
+	d.readDirty = true
+}
+
 func (d *GPUDevice) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if path == nil || path.Empty() || d.w == 0 || d.h == 0 || !xform.Finite() {
 		return
 	}
 	if err := d.MakeCurrent(); err != nil {
+		return
+	}
+	if d.fillAxisAligned(path, xform, paint, clip) {
 		return
 	}
 	e := d.tess.lookupFill(path, xform, paint.FillRule)
@@ -684,7 +729,14 @@ func (d *GPUDevice) Snapshot() *Image {
 	return d.pixels
 }
 
-func (d *GPUDevice) Present() error {
+func (d *GPUDevice) Present() error { return d.PresentRects(nil) }
+
+// PresentRects blits the FBO to the window and swaps. A nil/empty list is a
+// full-surface present. Non-empty rects are passed to
+// eglSwapBuffersWithDamageKHR/EXT when available so the compositor can
+// skip clean tiles (KDE/Qt partial update). The FBO→window blit stays
+// full-frame because EGL back buffers are not preserved after swap.
+func (d *GPUDevice) PresentRects(rects []Rect) error {
 	if d == nil || d.closed {
 		return ErrGPUUnavailable
 	}
@@ -720,11 +772,76 @@ func (d *GPUDevice) Present() error {
 	d.drawTris(d.quad)
 	C.glEnable(C.GL_BLEND)
 	C.glEnable(C.GL_STENCIL_TEST)
-	if C.eglSwapBuffers(d.dpy, d.surf) == C.EGL_FALSE {
+	if !d.swap(rects) {
 		return fmt.Errorf("paintengine2d: eglSwapBuffers 0x%x", C.eglGetError())
 	}
 	C.glBindFramebuffer(C.GL_FRAMEBUFFER, d.fbo)
 	return nil
+}
+
+func (d *GPUDevice) swap(rects []Rect) bool {
+	n := 0
+	if len(rects) > 0 {
+		need := len(rects) * 4
+		if cap(d.eglDamage) < need {
+			d.eglDamage = make([]C.EGLint, need)
+		} else {
+			d.eglDamage = d.eglDamage[:need]
+		}
+		for _, r := range rects {
+			x0, y0, x1, y1 := clampPixelBounds(r, d.w, d.h)
+			if x0 >= x1 || y0 >= y1 {
+				continue
+			}
+			// EGL damage origin is bottom-left.
+			d.eglDamage[n+0] = C.EGLint(x0)
+			d.eglDamage[n+1] = C.EGLint(d.h - y1)
+			d.eglDamage[n+2] = C.EGLint(x1 - x0)
+			d.eglDamage[n+3] = C.EGLint(y1 - y0)
+			n += 4
+		}
+	}
+	if n == 0 {
+		return C.eglSwapBuffers(d.dpy, d.surf) != C.EGL_FALSE
+	}
+	return C.pe_swap_with_damage(d.dpy, d.surf, &d.eglDamage[0], C.EGLint(n/4)) != 0
+}
+
+func (d *GPUDevice) fillAxisAligned(path *Path, xform Matrix, paint Paint, clip Clip) bool {
+	if paint.FillRule == FillEvenOdd || !isClosedRectPath(path) || !xform.IsAxisAligned() {
+		return false
+	}
+	r := xform.TransformRect(path.Bounds())
+	if r.Empty() {
+		return true
+	}
+	if paint.Shader == nil {
+		_, _, _, a := paint.Color.Premul8()
+		if a == 255 && clip.Mask == nil {
+			d.fillOpaqueRects([]Rect{r}, paint.Color, clip)
+			return true
+		}
+	}
+	if !d.applyClip(clip, r) {
+		return true
+	}
+	C.glDisable(C.GL_STENCIL_TEST)
+	C.glColorMask(C.GL_TRUE, C.GL_TRUE, C.GL_TRUE, C.GL_TRUE)
+	C.glStencilFunc(C.GL_ALWAYS, 0, 0xFF)
+	C.glStencilOp(C.GL_KEEP, C.GL_KEEP, C.GL_KEEP)
+	if paint.Shader == nil {
+		_, _, _, a := paint.Color.Premul8()
+		if a == 255 {
+			C.glDisable(C.GL_BLEND)
+		}
+	}
+	d.bindProgram(d.shaderMode(paint), paint, xform, clip)
+	d.coverQuad(r)
+	C.glEnable(C.GL_BLEND)
+	C.glEnable(C.GL_STENCIL_TEST)
+	C.glDisable(C.GL_SCISSOR_TEST)
+	d.readDirty = true
+	return true
 }
 
 func (d *GPUDevice) packPath(path *Path) {
@@ -920,7 +1037,16 @@ func (d *GPUDevice) bakeStops(stops []GradientStop) {
 }
 
 func (d *GPUDevice) uploadMask(clip Clip) {
-	alpha := make([]byte, clip.MaskW*clip.MaskH*4)
+	need := clip.MaskW * clip.MaskH * 4
+	if need <= 0 {
+		return
+	}
+	if cap(d.maskPix) < need {
+		d.maskPix = make([]byte, need)
+	} else {
+		d.maskPix = d.maskPix[:need]
+	}
+	alpha := d.maskPix
 	for i, v := range clip.Mask {
 		if i*4+3 >= len(alpha) {
 			break
