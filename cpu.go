@@ -51,6 +51,16 @@ func (d *CPUDevice) ClearRect(r Rect, c Color) {
 	d.img.ClearRect(r, c)
 }
 
+// Err implements the optional device error hook. The CPU backend cannot
+// fail asynchronously, so this is always nil.
+func (d *CPUDevice) Err() error { return nil }
+
+// BeginFrame is a no-op on the CPU backend.
+func (d *CPUDevice) BeginFrame() error { return nil }
+
+// EndFrame is a no-op on the CPU backend.
+func (d *CPUDevice) EndFrame() error { return nil }
+
 // Present is a no-op: the CPU pixmap is already the front buffer.
 func (d *CPUDevice) Present() error { return nil }
 
@@ -300,14 +310,20 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 }
 
 // blitTint returns the 8-bit RGB multiplier and alpha modulator for a blit.
-// Zero-value paint (and Color.A == 0 with no shader) is unmodulated white.
+//
+// Only the *zero-value* color means “untinted”; every other color is taken
+// literally, so Color.A == 0 with non-zero RGB paints nothing.
+// [Paint.Opacity] multiplies the result.
 func blitTint(paint Paint) (tr, tg, tb, ta uint8) {
+	op := paint.LayerAlpha()
 	c := paint.Color
-	if paint.Shader == nil && (c == (Color{}) || c.A == 0) {
-		return 255, 255, 255, 255
+	if c == (Color{}) {
+		a := uint8(clamp32(op, 0, 1)*255 + 0.5)
+		return 255, 255, 255, a
 	}
 	c = c.Clamp()
-	return uint8(c.R*255 + 0.5), uint8(c.G*255 + 0.5), uint8(c.B*255 + 0.5), uint8(c.A*255 + 0.5)
+	return uint8(c.R*255 + 0.5), uint8(c.G*255 + 0.5), uint8(c.B*255 + 0.5),
+		uint8(c.A*op*255 + 0.5)
 }
 
 func nearInt(v float32) (int, bool) {
@@ -365,10 +381,14 @@ func (d *CPUDevice) rasterFill(paint Paint, xform Matrix, clip Clip, rule int) {
 	solid := paint.Shader == nil
 	var sr, sg, sb, sa uint8
 	if solid {
-		sr, sg, sb, sa = paint.Color.Premul8()
+		sr, sg, sb, sa = paint.effectiveColor().Premul8()
 		if sa == 0 {
 			return
 		}
+	} else {
+		// Specialize the shader for this transform once instead of
+		// inverting the matrix for every shaded pixel.
+		paint.Shader = prepareShader(paint.Shader, xform)
 	}
 	w := d.img.Width
 	for y := y0; y < y1; y++ {
@@ -416,6 +436,9 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 			continue
 		}
 		col := paint.Shader.Shade(float32(x)+0.5, float32(y)+0.5, xform)
+		if op := paint.LayerAlpha(); op != 1 {
+			col.A *= op
+		}
 		rr, gg, bb, aa := col.Premul8()
 		if aa == 0 {
 			continue
@@ -485,7 +508,7 @@ func (d *CPUDevice) fillAxisAlignedRect(path *Path, xform Matrix, paint Paint, c
 	if !ok {
 		return true
 	}
-	sr, sg, sb, sa := paint.Color.Premul8()
+	sr, sg, sb, sa := paint.effectiveColor().Premul8()
 	if sa == 0 {
 		return true
 	}
@@ -516,61 +539,59 @@ func (d *CPUDevice) fillAxisAlignedRect(path *Path, xform Matrix, paint Paint, c
 	return true
 }
 
+// isClosedRectPath reports whether p is exactly one closed, axis-aligned
+// rectangle: Move + 3 (or 4) Lines + Close whose points walk four distinct
+// corners, each edge moving along exactly one axis.
+//
+// This must be strict: callers replace the scanline fill with an analytic
+// box. Before v0.11 it accepted any 4 points drawn from two distinct X and
+// two distinct Y values, so a right triangle (whose last LineTo returns to
+// the start) and a bow-tie were both painted as solid rectangles.
 func isClosedRectPath(p *Path) bool {
-	if p == nil || len(p.pts) < 4 {
+	if p == nil {
 		return false
 	}
-	hasClose := false
-	lines := 0
-	moves := 0
-	for _, v := range p.verbs {
-		switch v {
-		case VerbMove:
-			moves++
-		case VerbLine:
-			lines++
-		case VerbClose:
-			hasClose = true
-		default:
+	n := len(p.verbs)
+	if n < 5 || n > 6 {
+		return false
+	}
+	if p.verbs[0] != VerbMove || p.verbs[n-1] != VerbClose {
+		return false
+	}
+	for _, v := range p.verbs[1 : n-1] {
+		if v != VerbLine {
 			return false
 		}
 	}
-	if moves != 1 || !hasClose || lines < 3 || lines > 4 {
+	pts := p.pts
+	if len(pts) != n-1 {
 		return false
 	}
-	var xs, ys [4]float32
-	nx, ny := 0, 0
-	for _, q := range p.pts {
-		seenX := false
-		for i := 0; i < nx; i++ {
-			if abs32(xs[i]-q.X) < 1e-4 {
-				seenX = true
-				break
-			}
+	if len(pts) == 5 {
+		// Explicit closing line back to the start.
+		if !pts[4].Near(pts[0], 1e-4) {
+			return false
 		}
-		if !seenX {
-			if nx == 4 {
-				return false
-			}
-			xs[nx] = q.X
-			nx++
+		pts = pts[:4]
+	}
+	if len(pts) != 4 {
+		return false
+	}
+	const eps = 1e-4
+	for i := 0; i < 4; i++ {
+		a, b := pts[i], pts[(i+1)%4]
+		dx, dy := abs32(a.X-b.X), abs32(a.Y-b.Y)
+		// Exactly one axis moves, and the edge is not degenerate.
+		if dx > eps && dy > eps {
+			return false
 		}
-		seenY := false
-		for i := 0; i < ny; i++ {
-			if abs32(ys[i]-q.Y) < 1e-4 {
-				seenY = true
-				break
-			}
-		}
-		if !seenY {
-			if ny == 4 {
-				return false
-			}
-			ys[ny] = q.Y
-			ny++
+		if dx <= eps && dy <= eps {
+			return false
 		}
 	}
-	return nx == 2 && ny == 2
+	// Opposite corners must differ on both axes (rules out a degenerate
+	// "rectangle" that doubles back on itself).
+	return abs32(pts[0].X-pts[2].X) > eps && abs32(pts[0].Y-pts[2].Y) > eps
 }
 
 func clampPixelBounds(r Rect, w, h int) (x0, y0, x1, y1 int) {

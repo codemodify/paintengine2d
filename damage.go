@@ -19,6 +19,11 @@ type Damage struct {
 }
 
 // Add marks r dirty and coalesces when needed.
+//
+// The rectangle is snapped outward to whole device pixels: a dirty box is a
+// set of pixels, and a consumer that erases it (ClearRect, a scissored GPU
+// blit) already rounds outward. Keeping the fractional box would let a
+// replay decide an op "misses" a dirty rect whose pixels it actually paints.
 func (d *Damage) Add(r Rect) {
 	if d == nil {
 		return
@@ -27,6 +32,7 @@ func (d *Damage) Add(r Rect) {
 	if r.Empty() || !r.Finite() {
 		return
 	}
+	r = roundOutward(r)
 	pad := d.Pad
 	for i := range d.Rects {
 		if rectsNear(d.Rects[i], r, pad) {
@@ -151,6 +157,36 @@ func (d *Damage) coalesce() {
 		d.Rects = d.Rects[:1]
 		d.Rects[0] = u
 	}
+}
+
+// roundOutward snaps r to the whole pixels it touches.
+func roundOutward(r Rect) Rect {
+	return Rect{
+		Min: Point{floorf32(r.Min.X), floorf32(r.Min.Y)},
+		Max: Point{ceilf32(r.Max.X), ceilf32(r.Max.Y)},
+	}
+}
+
+func floorf32(v float32) float32 {
+	if v > 1<<30 || v < -(1<<30) {
+		return v
+	}
+	i := float32(int32(v))
+	if v < i {
+		i--
+	}
+	return i
+}
+
+func ceilf32(v float32) float32 {
+	if v > 1<<30 || v < -(1<<30) {
+		return v
+	}
+	i := float32(int32(v))
+	if v > i {
+		i++
+	}
+	return i
 }
 
 func rectsNear(a, b Rect, pad float32) bool {

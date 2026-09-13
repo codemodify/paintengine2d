@@ -28,6 +28,29 @@ func GroupLocalBounds(g *GroupNode) Rect {
 			nx := xf.Mul(t.Xform)
 			if t.Layer != nil {
 				r := nx.TransformRect(XYWH(t.LayerOrigin.X, t.LayerOrigin.Y, float32(t.Layer.Width), float32(t.Layer.Height)))
+				if t.HasClip {
+					r = r.Intersect(xf.TransformRect(t.Clip))
+				}
+				if r.Empty() {
+					return
+				}
+				if !has {
+					u, has = r, true
+				} else {
+					u = u.Union(r)
+				}
+				return
+			}
+			if t.HasClip {
+				// The child's clip lives in this (its parent's) space.
+				sub := GroupLocalBounds(t)
+				if sub.Empty() {
+					return
+				}
+				r := nx.TransformRect(sub).Intersect(xf.TransformRect(t.Clip))
+				if r.Empty() {
+					return
+				}
 				if !has {
 					u, has = r, true
 				} else {
@@ -63,6 +86,10 @@ func GroupLocalBounds(g *GroupNode) Rect {
 //
 // Call again after [GroupNode.InvalidateLayer] when children change.
 // Changing only Xform does not require a re-bake.
+//
+// A [GroupNode.Clip] is *not* baked into the layer: it lives in the parent's
+// space and is applied when the layer is blitted, so a clipped pane can be
+// baked once and then scrolled or resized by changing Clip/Xform alone.
 func BakeGroup(g *GroupNode) *Image {
 	if g == nil {
 		return nil

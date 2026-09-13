@@ -47,6 +47,29 @@ func TestOppositeWindingCancelsNonZero(t *testing.T) {
 }
 
 func TestSelfIntersectingBowtieEvenOdd(t *testing.T) {
+	// Hourglass: the two horizontal edges are the top and bottom, the two
+	// diagonals cross in the middle. Even-odd fills an upper and a lower
+	// triangle and leaves the left/right lobes empty.
+	img := NewImage(40, 40)
+	ctx := NewContext(img)
+	p := NewPath()
+	p.MoveTo(6, 6)
+	p.LineTo(34, 6)
+	p.LineTo(6, 34)
+	p.LineTo(34, 34)
+	p.Close()
+	ctx.DrawPath(p, Paint{Color: White, FillRule: FillEvenOdd})
+	assertAlpha(t, img, 20, 10, 200, 255, "upper triangle")
+	assertAlpha(t, img, 20, 30, 200, 255, "lower triangle")
+	assertAlpha(t, img, 8, 20, 0, 20, "left lobe is outside")
+	assertAlpha(t, img, 32, 20, 0, 20, "right lobe is outside")
+}
+
+// Regression: this bow-tie has two distinct X and two distinct Y values, so
+// the old isClosedRectPath treated it as an axis-aligned rectangle and the
+// fill fast path painted a solid box. The real even-odd shape is a left and
+// a right triangle.
+func TestBowtieIsNotARectFastPath(t *testing.T) {
 	img := NewImage(40, 40)
 	ctx := NewContext(img)
 	p := NewPath()
@@ -56,8 +79,47 @@ func TestSelfIntersectingBowtieEvenOdd(t *testing.T) {
 	p.LineTo(6, 34)
 	p.Close()
 	ctx.DrawPath(p, Paint{Color: White, FillRule: FillEvenOdd})
-	assertAlpha(t, img, 12, 10, 200, 255, "upper triangle")
-	assertAlpha(t, img, 28, 30, 200, 255, "lower triangle")
+	assertAlpha(t, img, 8, 10, 200, 255, "left lobe")
+	assertAlpha(t, img, 32, 10, 200, 255, "right lobe")
+	assertAlpha(t, img, 20, 10, 0, 20, "middle of a bow-tie row is outside")
+	if isClosedRectPath(p) {
+		t.Fatal("bow-tie must not match the rectangle fast path")
+	}
+}
+
+// Regression: a triangle whose final LineTo returns to the start also has
+// only two distinct X and two distinct Y values.
+func TestRightTriangleIsNotARectFastPath(t *testing.T) {
+	img := NewImage(40, 40)
+	ctx := NewContext(img)
+	p := NewPath()
+	p.MoveTo(5, 5)
+	p.LineTo(35, 5)
+	p.LineTo(35, 35)
+	p.LineTo(5, 5)
+	p.Close()
+	if isClosedRectPath(p) {
+		t.Fatal("right triangle must not match the rectangle fast path")
+	}
+	ctx.DrawPath(p, Fill(White))
+	assertAlpha(t, img, 30, 10, 200, 255, "inside the triangle")
+	assertAlpha(t, img, 8, 32, 0, 20, "corner outside the triangle")
+}
+
+func TestRectFastPathStillMatchesRects(t *testing.T) {
+	if !isClosedRectPath(RectPath(XYWH(2, 3, 10, 6))) {
+		t.Fatal("RectPath must keep the fast path")
+	}
+	p := NewPath()
+	p.MoveTo(0, 0)
+	p.LineTo(10, 0)
+	p.LineTo(10, 8)
+	p.LineTo(0, 8)
+	p.LineTo(0, 0) // explicit closing line
+	p.Close()
+	if !isClosedRectPath(p) {
+		t.Fatal("explicitly closed rectangle must keep the fast path")
+	}
 }
 
 func TestQuadAndCubicFillClosed(t *testing.T) {

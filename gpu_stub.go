@@ -10,6 +10,8 @@ type GPUDevice struct {
 
 func gpuAvailable() bool { return false }
 
+func gpuUsable(d *GPUDevice) bool { return false }
+
 func gpuInfo() string { return "" }
 
 func newGPUDevice(w, h int) (*GPUDevice, error) {
@@ -19,6 +21,11 @@ func newGPUDevice(w, h int) (*GPUDevice, error) {
 
 func newGPUDeviceEGL(n EGLNative) (*GPUDevice, error) {
 	_ = n
+	return nil, ErrGPUUnavailable
+}
+
+func newGPUDeviceAdopt(a EGLAdopt) (*GPUDevice, error) {
+	_ = a
 	return nil, ErrGPUUnavailable
 }
 
@@ -51,10 +58,21 @@ func (d *GPUDevice) SnapshotRect(r Rect) *Image {
 	_, _ = r, d
 	return nil
 }
-func (d *GPUDevice) Resize(w, h int) error { _, _ = w, h; return ErrGPUUnavailable }
-func (d *GPUDevice) Close() error          { return nil }
-func (d *GPUDevice) MakeCurrent() error    { return ErrGPUUnavailable }
-func (d *GPUDevice) Kind() BackendKind     { return BackendGPU }
+func (d *GPUDevice) Resize(w, h int) error                        { _, _ = w, h; return ErrGPUUnavailable }
+func (d *GPUDevice) BeginFrame() error                            { return ErrGPUUnavailable }
+func (d *GPUDevice) EndFrame() error                              { return ErrGPUUnavailable }
+func (d *GPUDevice) Err() error                                   { return ErrGPUUnavailable }
+func (d *GPUDevice) ClearErr()                                    {}
+func (d *GPUDevice) Antialiased() bool                            { return false }
+func (d *GPUDevice) Samples() int                                 { return 1 }
+func (d *GPUDevice) SetTextureBudget(int)                         {}
+func (d *GPUDevice) TextureBytes() int                            { return 0 }
+func (d *GPUDevice) ReleaseImage(*Image)                          {}
+func (d *GPUDevice) PresentDamageAge() int                        { return 0 }
+func (d *GPUDevice) EGLHandles() (display, context, draw uintptr) { return 0, 0, 0 }
+func (d *GPUDevice) Close() error                                 { return nil }
+func (d *GPUDevice) MakeCurrent() error                           { return ErrGPUUnavailable }
+func (d *GPUDevice) Kind() BackendKind                            { return BackendGPU }
 
 func (d *GPUDevice) fillOpaqueRects(rects []Rect, color Color, clip Clip) {
 	_, _, _ = rects, color, clip
