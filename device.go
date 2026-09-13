@@ -18,9 +18,21 @@ package paintengine2d
 // source-compatible): ClearRect(Rect, Color) for dirty-rect erase;
 // Present() / PresentRects([]Rect) / SetPresentDamage([]Rect) for GPU
 // swap-with-damage (and EGL_KHR_partial_update when present);
-// Scroll(dx, dy int, r Rect) for intra-surface memmove. [Context]
-// type-asserts these. See [Context.ClearRect], [Context.PresentDamage],
-// [Context.Scroll], [DrawSceneDamage].
+// Scroll(dx, dy int, r Rect) for intra-surface memmove; BeginFrame() error
+// / EndFrame() error to bracket a batch of draws; Err() error for a sticky
+// backend error. [Context] type-asserts these. See [Context.ClearRect],
+// [Context.PresentDamage], [Context.Scroll], [Context.BeginFrame],
+// [Context.Err], [DrawSceneDamage].
+//
+// Draw methods deliberately return nothing: a backend that cannot paint
+// (lost GPU context, wrong thread) records the reason and [Context.Err]
+// reports it once per frame.
+//
+// TODO(compositor): importing foreign buffers (dmabuf / EGLImage / an
+// external GL texture) as a [Device] source, and exporting a fence so a
+// compositor can synchronize with a client's rendering, are not implemented.
+// They need EGL_EXT_image_dma_buf_import and EGL_KHR_fence_sync plumbing
+// plus a public handle type, and are tracked separately from this release.
 type Device interface {
 	// Size is the device pixmap / target size in pixels.
 	Size() (w, h int)
