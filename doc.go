@@ -49,6 +49,14 @@
 //
 // # UI subset
 //
+// v0.11.0 is a correctness pass: [DrawSceneDamage] replays once per dirty
+// box (no double-blend, no skipped background restore), [GroupNode] gained a
+// parent-space Clip so a scroll offset in Xform keeps a fixed viewport,
+// [Paint.Opacity] makes layer alpha explicit (and a zero-alpha tint finally
+// paints nothing), the scanline rasterizer keeps an active edge list, and
+// the GPU backend refcounts its EGL display, multisamples, bounds its
+// texture cache by [Image.ID], honours buffer age on partial present, and
+// reports errors ([Context.Err], [Context.BeginFrame] / EndFrame).
 // v0.10.0 adds [DrawSceneDamage] (dirty replay), [BakeGroup] (pane layer
 // blit), and GPU partial present (EGL_KHR_partial_update / swap-with-damage).
 // v0.9.2 adds Scroll/CopyImage, label LRU, clip COW, in-place resize,

@@ -11,9 +11,36 @@ const (
 	Close
 )
 
+// CoordLimit bounds the coordinates the flattener will consider. Points
+// further out are clamped: they are off any plausible surface, and letting
+// them through makes curve subdivision overflow to Inf/NaN (which used to
+// recurse to the depth cap and allocate millions of points).
+const CoordLimit = 1 << 20
+
+// MaxFlattenDepth caps de Casteljau recursion. 2^14 segments is far past
+// what a visible curve needs; the cap only fires on degenerate geometry.
+const MaxFlattenDepth = 14
+
+func clampCoord(v float32) float32 {
+	if v != v { // NaN
+		return 0
+	}
+	if v > CoordLimit {
+		return CoordLimit
+	}
+	if v < -CoordLimit {
+		return -CoordLimit
+	}
+	return v
+}
+
+func clampPt(p Vec2) Vec2 { return Vec2{clampCoord(p.X), clampCoord(p.Y)} }
+
 // Flatten walks a path and appends device-space polylines (one slice per
 // contour). Closed contours have their first point repeated at the end and
 // closed[i] == true.
+//
+// Coordinates are clamped to ±[CoordLimit]; non-finite points are skipped.
 //
 // tol is the flattening tolerance in the same space as pts (device pixels).
 func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *[]bool) {
@@ -65,7 +92,7 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 		switch v {
 		case Move:
 			flush(false)
-			p := pts[pi]
+			p := clampPt(pts[pi])
 			pi++
 			if !p.finite() {
 				continue
@@ -74,7 +101,7 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			ensure()
 			cur = append(cur, p)
 		case Line:
-			p := pts[pi]
+			p := clampPt(pts[pi])
 			pi++
 			if !p.finite() {
 				continue
@@ -87,8 +114,8 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			}
 			cur = append(cur, p)
 		case Quad:
-			c := pts[pi]
-			p := pts[pi+1]
+			c := clampPt(pts[pi])
+			p := clampPt(pts[pi+1])
 			pi += 2
 			if !c.finite() || !p.finite() {
 				continue
@@ -101,9 +128,9 @@ func Flatten(verbs []Verb, pts []Vec2, tol float32, contours *[][]Vec2, closed *
 			from := cur[len(cur)-1]
 			cur = flattenQuad(cur, from, c, p, tol, 0)
 		case Cubic:
-			c1 := pts[pi]
-			c2 := pts[pi+1]
-			p := pts[pi+2]
+			c1 := clampPt(pts[pi])
+			c2 := clampPt(pts[pi+1])
+			p := clampPt(pts[pi+2])
 			pi += 3
 			if !c1.finite() || !c2.finite() || !p.finite() {
 				continue
@@ -135,7 +162,9 @@ func (p Vec2) near(q Vec2, eps float32) bool {
 }
 
 func flattenQuad(out []Vec2, p0, p1, p2 Vec2, tol float32, depth int) []Vec2 {
-	if depth > 24 || distPointToLine(p1, p0, p2) <= tol {
+	// Written as !(d > tol) so a NaN distance (overflowed coordinates)
+	// terminates instead of recursing to the depth cap.
+	if depth >= MaxFlattenDepth || !(distPointToLine(p1, p0, p2) > tol) {
 		return append(out, p2)
 	}
 	// de Casteljau
@@ -150,7 +179,7 @@ func flattenQuad(out []Vec2, p0, p1, p2 Vec2, tol float32, depth int) []Vec2 {
 func flattenCubic(out []Vec2, p0, p1, p2, p3 Vec2, tol float32, depth int) []Vec2 {
 	d1 := distPointToLine(p1, p0, p3)
 	d2 := distPointToLine(p2, p0, p3)
-	if depth > 24 || d1+d2 <= tol {
+	if depth >= MaxFlattenDepth || !(d1+d2 > tol) {
 		return append(out, p3)
 	}
 	p01 := p0.add(p1).mul(0.5)

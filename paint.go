@@ -138,9 +138,20 @@ type RadialGradient struct {
 //
 // If Shader is non-nil it overrides Color. AntiAlias is reserved; the CPU
 // backend always anti-aliases path edges (there is no jaggy mode).
-// Filter applies to image blits. On blit / DrawGlyphs, Color RGB multiplies
-// premul samples and Color.A modulates coverage (zero-value paint = untinted).
-// Blend is src-over unless documented later.
+// Filter applies to image blits. Blend is src-over unless documented later.
+//
+// Tinting (blit / DrawGlyphs): Color RGB multiplies premul samples and
+// Color.A modulates coverage. The *zero-value* Color (all four components 0)
+// means “no tint” — an unmodulated white multiplier — so a zero-value Paint
+// blits the source unchanged. Any other color is taken literally, so
+// Color.A == 0 with non-zero RGB is fully transparent and paints nothing
+// (before v0.11 it was silently treated as opaque).
+//
+// Opacity is an extra layer alpha in [0, 1] applied on top of Color/Shader
+// alpha by every draw. Zero means 1 (fully opaque) so the zero value of
+// Paint keeps its old meaning; use a small epsilon (or Color.A) to fade to
+// nothing. A compositor animating a window fade sets Opacity once instead of
+// rewriting every color.
 type Paint struct {
 	Color     Color
 	Shader    Shader
@@ -150,6 +161,61 @@ type Paint struct {
 	Filter    FilterMode
 	Blend     BlendMode
 	AntiAlias bool
+	Opacity   float32
+}
+
+// LayerAlpha is [Paint.Opacity] resolved: 0 means 1, and the result is
+// clamped to [0, 1].
+func (p Paint) LayerAlpha() float32 {
+	if p.Opacity == 0 {
+		return 1
+	}
+	return clamp32(p.Opacity, 0, 1)
+}
+
+// WithOpacity returns p with Opacity set to a (0 → fully transparent is
+// expressed as a tiny epsilon; use Paint.Color.WithAlpha(0) for “invisible”).
+func (p Paint) WithOpacity(a float32) Paint {
+	p.Opacity = clamp32(a, 0, 1)
+	return p
+}
+
+// effectiveColor folds Opacity into Color.A.
+func (p Paint) effectiveColor() Color {
+	c := p.Color
+	if a := p.LayerAlpha(); a != 1 {
+		c.A *= a
+	}
+	return c
+}
+
+// isOpaqueSolid reports whether the paint paints every covered pixel fully
+// opaque with a single solid color (used by the rect fast paths).
+func (p Paint) isOpaqueSolid() bool {
+	if p.Shader != nil {
+		return false
+	}
+	_, _, _, a := p.effectiveColor().Premul8()
+	return a == 255
+}
+
+// PreparedShader is an optional optimization hook: a [Shader] that can
+// specialize itself for one transform, so per-pixel work does not repeat the
+// matrix inverse. [CPUDevice] calls Prepare once per draw and then shades
+// through the returned Shader. Implementing it is optional.
+type PreparedShader interface {
+	Shader
+	// Prepare returns a shader equivalent to the receiver for this xform.
+	// The result is used only for the current draw and may alias the receiver.
+	Prepare(xform Matrix) Shader
+}
+
+// prepareShader specializes sh for xform when it supports it.
+func prepareShader(sh Shader, xform Matrix) Shader {
+	if p, ok := sh.(PreparedShader); ok {
+		return p.Prepare(xform)
+	}
+	return sh
 }
 
 // Shader produces a color for a device-space sample. Implementations must
@@ -189,6 +255,37 @@ func (c Color) Shade(x, y float32, xform Matrix) Color {
 	return c
 }
 
+// Prepare implements [PreparedShader]: it bakes the inverse transform so
+// shading a span does not invert the matrix per pixel.
+func (g LinearGradient) Prepare(xform Matrix) Shader {
+	inv, ok := xform.Invert()
+	if !ok {
+		inv = Identity()
+	}
+	return preparedLinear{g: g, inv: inv}
+}
+
+type preparedLinear struct {
+	g   LinearGradient
+	inv Matrix
+}
+
+func (p preparedLinear) Shade(x, y float32, _ Matrix) Color {
+	return p.g.shadeUser(p.inv.Transform(Point{x, y}))
+}
+
+func (g LinearGradient) shadeUser(p Point) Color {
+	d := g.End.Sub(g.Start)
+	lenSq := d.LenSq()
+	var t float32
+	if lenSq < 1e-12 {
+		t = 0
+	} else {
+		t = p.Sub(g.Start).Dot(d) / lenSq
+	}
+	return sampleStops(g.Stops, tileParam(t, g.Tile))
+}
+
 // Shade implements [Shader] for [LinearGradient].
 func (g LinearGradient) Shade(x, y float32, xform Matrix) Color {
 	inv, ok := xform.Invert()
@@ -207,6 +304,52 @@ func (g LinearGradient) Shade(x, y float32, xform Matrix) Color {
 	}
 	t = tileParam(t, g.Tile)
 	return sampleStops(g.Stops, t)
+}
+
+// Prepare implements [PreparedShader].
+func (g RadialGradient) Prepare(xform Matrix) Shader {
+	inv, ok := xform.Invert()
+	if !ok {
+		inv = Identity()
+	}
+	return preparedRadial{g: g, inv: inv}
+}
+
+type preparedRadial struct {
+	g   RadialGradient
+	inv Matrix
+}
+
+func (p preparedRadial) Shade(x, y float32, _ Matrix) Color {
+	return p.g.shadeUser(p.inv.Transform(Point{x, y}))
+}
+
+func (g RadialGradient) shadeUser(p Point) Color {
+	origin := g.Center
+	if g.Focal != (Point{}) && (g.Focal.X != g.Center.X || g.Focal.Y != g.Center.Y) {
+		origin = g.Focal
+	}
+	r1 := g.Radius
+	if r1 < 0 {
+		r1 = -r1
+	}
+	r0 := g.Inner
+	if r0 < 0 {
+		r0 = -r0
+	}
+	d := p.Sub(origin).Len()
+	var t float32
+	span := r1 - r0
+	if span < 1e-8 {
+		if d <= r1 {
+			t = 0
+		} else {
+			t = 1
+		}
+	} else {
+		t = (d - r0) / span
+	}
+	return sampleStops(g.Stops, tileParam(t, g.Tile))
 }
 
 // Shade implements [Shader] for [RadialGradient].

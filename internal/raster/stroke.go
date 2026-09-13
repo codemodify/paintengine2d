@@ -71,6 +71,14 @@ func (p *StrokePool) Expand(contours [][]Vec2, closed []bool, opt StrokeOpts) []
 		pts := dedupeContourInto(p.pts, c, isClosed)
 		p.pts = pts
 		if len(pts) < 2 {
+			// Zero-length subpath: round and square caps still paint a dot
+			// (Skia/Cairo); butt paints nothing.
+			if len(pts) == 1 && !isClosed {
+				if dot := p.degenerateDot(pts[0], half, opt.Cap); len(dot) >= 3 {
+					out = append(out, p.snapshotOutline(storeI, dot))
+					storeI++
+				}
+			}
 			continue
 		}
 		if isClosed && len(pts) < 3 {
@@ -143,6 +151,11 @@ func (p *StrokePool) strokeContour(pts []Vec2, closed bool, half float32, opt St
 	}
 	p.segs = segs
 	if len(segs) == 0 {
+		// Degenerate contour (all points coincident). Round and square caps
+		// still paint a dot there, matching Skia/Cairo; butt paints nothing.
+		if !closed {
+			return p.degenerateDot(pts[0], half, opt.Cap)
+		}
 		return nil
 	}
 
@@ -252,6 +265,47 @@ func (p *StrokePool) strokeContour(pts []Vec2, closed bool, half float32, opt St
 	}
 	p.left, p.right, p.outline = left, right, outline
 	return outline
+}
+
+// degenerateDot builds the outline a zero-length subpath paints: a full
+// circle for a round cap, a square for a square cap, nothing for butt.
+func (p *StrokePool) degenerateDot(c Vec2, half float32, capStyle int) []Vec2 {
+	if half <= 0 {
+		return nil
+	}
+	out := p.outline[:0]
+	switch capStyle {
+	case CapRound:
+		// A full circle, emitted directly: appendWedge always takes the
+		// shorter sweep, so two half turns would retrace the same arc and
+		// cancel under the non-zero rule.
+		steps := 16
+		if n := int(math.Ceil(2 * math.Pi / (0.35 / math.Max(float64(half), 0.35)))); n > steps {
+			steps = n
+		}
+		if steps > 128 {
+			steps = 128
+		}
+		for i := 0; i <= steps; i++ {
+			a := 2 * math.Pi * float64(i) / float64(steps)
+			out = append(out, Vec2{
+				X: c.X + half*float32(math.Cos(a)),
+				Y: c.Y + half*float32(math.Sin(a)),
+			})
+		}
+	case CapSquare:
+		out = append(out,
+			Vec2{c.X - half, c.Y - half},
+			Vec2{c.X + half, c.Y - half},
+			Vec2{c.X + half, c.Y + half},
+			Vec2{c.X - half, c.Y + half},
+			Vec2{c.X - half, c.Y - half},
+		)
+	default:
+		return nil
+	}
+	p.outline = out
+	return out
 }
 
 func appendCap(out []Vec2, center, from, to, outward Vec2, half float32, cap int) []Vec2 {

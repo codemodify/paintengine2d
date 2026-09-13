@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"sync/atomic"
 )
 
 // Image is a pixmap in premultiplied 8-bit sRGB RGBA.
@@ -28,12 +29,40 @@ type Image struct {
 	Stride int
 	Pix    []byte
 	// Epoch increments when pixels change ([Image.Clear], [Image.SetColor],
-	// [Image.Bump] / [Image.Touch] / [Image.TouchRect]). [GPUDevice] keys
-	// its texture cache on this so a reused glyph/icon atlas is re-uploaded
-	// after an in-place bake. [Image.Dirty] is the union of in-place writes
-	// since the last GPU upload (empty means “whole image”).
+	// [Image.Bump] / [Image.Touch] / [Image.TouchRect], [Image.Scroll],
+	// [Image.CopyFrom], [Image.ClearRect]). [GPUDevice] keys its texture
+	// cache on this so a reused glyph/icon atlas is re-uploaded after an
+	// in-place bake. [Image.Dirty] is the union of in-place writes since
+	// the last GPU upload (empty means “whole image”).
 	Epoch uint64
 	Dirty Rect
+	// ID is a process-unique identity assigned by [NewImage] / [WrapImage].
+	// [GPUDevice] keys its texture cache on it: a raw pointer key could be
+	// recycled by the allocator and serve another image's texture. Images
+	// built as struct literals get one on the first [Image.UID] call.
+	// Copying an Image value copies its ID — use [Image.Clone].
+	ID uint64
+}
+
+// imageIDs hands out [Image.ID] values. Zero is reserved for "unassigned".
+var imageIDs atomic.Uint64
+
+func nextImageID() uint64 { return imageIDs.Add(1) }
+
+// UID returns the image's process-unique identity, assigning one if the
+// Image was built as a struct literal. Safe for concurrent use.
+func (im *Image) UID() uint64 {
+	if im == nil {
+		return 0
+	}
+	if id := atomic.LoadUint64(&im.ID); id != 0 {
+		return id
+	}
+	id := nextImageID()
+	if atomic.CompareAndSwapUint64(&im.ID, 0, id) {
+		return id
+	}
+	return atomic.LoadUint64(&im.ID)
 }
 
 // NewImage allocates a transparent packed w×h pixmap (stride = width*4).
@@ -49,6 +78,7 @@ func NewImage(w, h int) *Image {
 		Height: h,
 		Stride: w * 4,
 		Pix:    make([]byte, w*h*4),
+		ID:     nextImageID(),
 	}
 }
 
@@ -74,7 +104,7 @@ func WrapImage(pix []byte, w, h, stride int) *Image {
 	if len(pix) < need {
 		return nil
 	}
-	return &Image{Width: w, Height: h, Stride: stride, Pix: pix}
+	return &Image{Width: w, Height: h, Stride: stride, Pix: pix, ID: nextImageID()}
 }
 
 // RowStride returns the byte stride (never 0 for a non-empty image).
@@ -398,6 +428,8 @@ func (im *Image) Scroll(dx, dy int, r Rect) {
 			copy(pix[di:di+rowBytes], pix[si:si+rowBytes])
 		}
 	}
+	// Pixels moved in place: a GPU texture cached for this image is stale.
+	im.TouchRect(XYWH(float32(dstX0), float32(dstY0), float32(w), float32(h)))
 }
 
 // CopyFrom copies srcRect from src to (destX, destY) using SRC (not src-over).
@@ -441,4 +473,5 @@ func (im *Image) CopyFrom(src *Image, srcRect Rect, destX, destY int) {
 		di := (destY+y)*dstride + destX*4
 		copy(im.Pix[di:di+rowBytes], src.Pix[si:si+rowBytes])
 	}
+	im.TouchRect(XYWH(float32(destX), float32(destY), float32(w), float32(h)))
 }

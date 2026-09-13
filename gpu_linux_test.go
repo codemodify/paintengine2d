@@ -4,7 +4,6 @@ package paintengine2d
 
 import (
 	"testing"
-	"unsafe"
 )
 
 func TestGPUFlattenCacheAndAtlasEpoch(t *testing.T) {
@@ -36,7 +35,7 @@ func TestGPUFlattenCacheAndAtlasEpoch(t *testing.T) {
 	atlas.Clear(White)
 	e0 := atlas.Epoch
 	dev.Blit(atlas, XYWH(0, 0, 8, 8), XYWH(4, 4, 8, 8), xf, Paint{Color: White, Filter: FilterNearest}, clip)
-	key := uintptr(unsafe.Pointer(atlas))
+	key := atlas.UID()
 	tex1, ok := dev.texCache[key]
 	if !ok {
 		t.Fatal("expected atlas in tex cache")
@@ -206,7 +205,7 @@ func TestGPUAtlasTouchRectKeepsTex(t *testing.T) {
 	xf := Identity()
 	clip := Clip{}
 	dev.Blit(atlas, XYWH(0, 0, 16, 16), XYWH(0, 0, 16, 16), xf, Paint{Color: White, Filter: FilterNearest}, clip)
-	key := uintptr(unsafe.Pointer(atlas))
+	key := atlas.UID()
 	id1 := dev.texCache[key].id
 	atlas.ClearRect(XYWH(2, 2, 4, 4), RGB(0.2, 0.9, 0.3))
 	atlas.TouchRect(XYWH(2, 2, 4, 4))

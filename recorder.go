@@ -9,6 +9,9 @@ type Recorder struct {
 	stack  []*GroupNode
 	nodes  int
 	reused int
+	// intern deduplicates recorded path snapshots: a list of identical
+	// rows records one Path, not one per row.
+	intern map[uint64][]*Path
 }
 
 // NewRecorder starts an empty recording of a w×h target.
@@ -79,6 +82,44 @@ func (r *Recorder) Attach(g *GroupNode) {
 	r.reused++
 }
 
+// internPath returns an immutable snapshot of path, reusing an equal one
+// recorded earlier in this scene. Recorded paths are never mutated, so
+// sharing is safe and a repeated widget shape costs one clone per scene.
+func (r *Recorder) internPath(path *Path) *Path {
+	h := hashPath(path)
+	if r.intern == nil {
+		r.intern = make(map[uint64][]*Path)
+	}
+	for _, c := range r.intern[h] {
+		if pathEqual(c, path) {
+			return c
+		}
+	}
+	c := path.Clone()
+	r.intern[h] = append(r.intern[h], c)
+	return c
+}
+
+func pathEqual(a, b *Path) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil || len(a.verbs) != len(b.verbs) || len(a.pts) != len(b.pts) {
+		return false
+	}
+	for i := range a.verbs {
+		if a.verbs[i] != b.verbs[i] {
+			return false
+		}
+	}
+	for i := range a.pts {
+		if a.pts[i] != b.pts[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // Finish snapshots the recording. The recorder can still be inspected;
 // start a new [NewRecorder] for the next frame.
 func (r *Recorder) Finish() *Scene {
@@ -117,7 +158,7 @@ func (r *Recorder) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 	}
 	r.add(&drawOp{
 		kind:  opFill,
-		path:  path.Clone(),
+		path:  r.internPath(path),
 		xform: xform,
 		paint: clonePaint(paint),
 		clip:  cloneClip(clip),
@@ -131,7 +172,7 @@ func (r *Recorder) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 	}
 	r.add(&drawOp{
 		kind:  opStroke,
-		path:  path.Clone(),
+		path:  r.internPath(path),
 		xform: xform,
 		paint: clonePaint(paint),
 		clip:  cloneClip(clip),
@@ -154,11 +195,11 @@ func (r *Recorder) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint P
 	})
 }
 
-func cloneClip(c Clip) Clip {
-	if c.Mask != nil {
-		c.Mask = append([]byte(nil), c.Mask...)
-	}
-	return c
-}
+// cloneClip retains the recorded clip. The coverage mask is shared by
+// reference: [Context.clip] marks an exported mask immutable, so the next
+// ClipPath allocates a fresh buffer instead of overwriting these bytes.
+// Deep-copying here cost one full mask per recorded op — a 33-glyph label
+// under a round-rect clip allocated megabytes every frame.
+func cloneClip(c Clip) Clip { return c }
 
 var _ Device = (*Recorder)(nil)
