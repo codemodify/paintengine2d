@@ -2,6 +2,141 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.11.0 — 2026-09-13
+
+Correctness pass over the rasterizer, the dirty-rect replay and the GPU
+backend, from a full review of v0.10.0. Everything here is additive: fields
+and methods were added, none removed, and a v0.10.0 caller keeps compiling
+and rendering the same — except where it was rendering *wrong*.
+
+### Fixed — GPU / compositor blockers
+
+- **`GPUDevice.Close` no longer terminates a shared EGL display.** Displays
+  are reference counted per process: `eglGetDisplay` hands every device on a
+  connection the same handle, and `eglTerminate` destroys *all* of their
+  contexts and surfaces. Closing one window's device used to silently kill
+  every other device (draws became no-ops, `Present` returned
+  `EGL_NOT_INITIALIZED`). The availability probe now holds a reference of
+  its own, so probing can never disturb a live device, and `DrawSceneDamage`
+  no longer calls `GPUAvailable()` mid-replay.
+- **Partial present honours buffer age.** With `EGL_KHR_partial_update` and
+  a buffer age of N, the back buffer holds the frame from N swaps ago, so
+  the blit now repaints this frame's damage *plus* the previous N-1 frames'
+  (a 4-frame ring). Repainting only the current damage is what left stale
+  tiles on Wayland. Age 0 or beyond the ring falls back to a full blit.
+  New: `GPUDevice.PresentDamageAge`.
+- **GPU anti-aliasing.** The render target is multisampled (4x where the
+  driver offers ES3 multisample renderbuffers, resolved on read-back and on
+  present), and axis-aligned rect fills carry an *analytic* coverage fringe
+  on every driver. A fractional rect edge was a hard, aliased step before;
+  a curve edge had no AA at all. `UITK_PAINT_MSAA=0` turns the multisample
+  target off (worth it on software GL, where 4 samples cost 4x the fill).
+  New: `GPUDevice.Antialiased`, `GPUDevice.Samples`, `MSAAEnabled`.
+- **Texture cache keyed by image identity, bounded, and releasable.** The
+  cache was keyed on the `*Image` address and never evicted: it leaked a
+  texture per pixmap ever blitted, and a recycled address could serve
+  another image's texture. Keys are now [Image.ID] with an LRU byte budget.
+  New: `Image.ID` / `Image.UID`, `GPUDevice.ReleaseImage`,
+  `GPUDevice.SetTextureBudget`, `GPUDevice.TextureBytes`.
+- **Errors are reported instead of swallowed.** Draw calls cannot return
+  errors, so the device records the first one: a lost context, a failed
+  swap, a GL error, or use from the wrong OS thread (an EGL context is
+  thread-bound; cross-thread draws used to paint nothing, silently).
+  New: `GPUDevice.Err` / `ClearErr`, `Context.Err`, `CPUDevice.Err`.
+- **`BeginFrame` / `EndFrame`** bracket a batch of draws so the context is
+  made current once per frame instead of once per draw call. Optional;
+  unbracketed draws still work. New on `GPUDevice`, `CPUDevice`, `Context`.
+- **`unsafe.Pointer(uintptr(n))` removed.** Vertex attribute offsets and
+  EGL handles go through C helpers, so `go vet` is clean and
+  `go test -race ./...` no longer aborts in `checkptr`.
+
+### Fixed — dirty-rect replay
+
+- `DrawSceneDamage` replays the scene **once per dirty rectangle**. It used
+  to scissor every op to the *union* while erasing only the boxes, so a
+  translucent op straddling two boxes was composited a second time into the
+  clean gap between them (a hover row darkened on every frame).
+- A group that contains a recorded `Clear` is **never skipped**. Group
+  bounds are the union of the draw ops, so a dirty box over a *removed*
+  widget matched nothing, the root group was skipped, and the background was
+  never restored — the removed tooltip stayed on screen.
+- Blit bounds are padded by a pixel like geometry, and [Damage.Add] snaps
+  rectangles outward to whole pixels. A blit at a fractional destination was
+  skipped by a dirty rect that had already erased its pixels.
+- A recorded clip mask replayed under a transformed group is resampled. A
+  fractional translation used to truncate the offset (off by one) and any
+  rotation or scale dropped the mask entirely, un-clipping the op.
+
+### Added — `GroupNode` clipping (parent space)
+
+`GroupNode` gained `Clip` / `HasClip` / `ClipPath` / `ClipRule` plus
+`SetClipRect`, `SetClipPath` and `ClearClip`. The clip is expressed in the
+**parent's** coordinate space and is deliberately not multiplied by the
+node's own `Xform`, so a scroll view is a fixed viewport (the group clip)
+plus a moving content transform: re-attaching a cached group with a new
+`Xform` slides the children under a clip that stays put. Clips recorded into
+the children still travel with them, as before. The zero value has no clip,
+so existing scenes replay unchanged.
+
+### Fixed — rasterizer
+
+- **`isClosedRectPath` is strict.** It accepted any 4 points drawn from two
+  distinct X and two distinct Y values, so a right triangle (whose last
+  `LineTo` returns to the start) and a bow-tie were both painted as solid
+  rectangles by the CPU fill fast path, the GPU fast path, and the scene
+  rect batcher.
+- **Flattening is overflow- and NaN-safe.** Finite but enormous control
+  points overflowed to NaN during subdivision; the NaN comparison never
+  terminated, so a single curve recursed to the depth cap and allocated
+  ~1.4 GB over ~10 s. Coordinates are clamped to ±`CoordLimit` (2²⁰), the
+  flatness test terminates on NaN, and the depth cap is 14.
+- **Zero-length subpaths paint a dot** with round and square caps
+  (Skia/Cairo behaviour); butt still paints nothing.
+- **Transparent means transparent.** A blit/glyph tint with `Color.A == 0`
+  and non-zero RGB was treated as "untinted" and painted fully opaque — a
+  widget fading out snapped back on its last frame. Only the *zero-value*
+  color still means "no tint".
+- Coverage accumulation saturates instead of wrapping.
+
+### Added — `Paint.Opacity`
+
+A layer alpha in [0, 1] applied on top of color/shader alpha by fills,
+strokes, blits and glyphs on both backends. Zero means 1, so the zero value
+of `Paint` is unchanged. `Paint.LayerAlpha` / `Paint.WithOpacity` resolve it.
+
+### Added — external EGL
+
+`EGLNative.Alpha` requests an ARGB (`EGL_ALPHA_SIZE 8`) window config for
+translucent compositor chrome; `EGLNative.Share` passes a share context so
+per-output devices can upload one atlas. `EGLAdopt` + `NewGPUDeviceAdopt`
+bind a device to an `EGLDisplay`/`EGLContext` the host already owns
+(paintengine2d never destroys those), and `GPUDevice.EGLHandles` exposes
+this device's handles. **Not implemented:** dmabuf / `EGLImage` import and
+fence export — see the TODO in `device.go`.
+
+### Performance
+
+- The scanline rasterizer keeps an **active edge list**: edges are sorted by
+  top Y once and each row admits/retires only what changed, instead of
+  scanning every edge on every one of the 8 sub-scanlines. A 8192-edge path
+  over 1000 rows: 156 ms → 91 ms.
+- Gradient shaders are **prepared once per draw** (the matrix inverse was
+  recomputed per pixel) through the new optional `PreparedShader` hook.
+- The `Recorder` **shares** clip coverage masks instead of deep-copying one
+  per op (a 33-glyph label under a round-rect clip allocated ~2 MB per
+  frame) and **interns** identical path snapshots. `Context` marks an
+  exported mask immutable, so sharing is safe.
+- GPU gradient ramps and clip masks are re-uploaded only when they change,
+  and masks upload as single-channel `GL_ALPHA` instead of expanded RGBA.
+- The tessellation cache verifies a hit against the real path, so a 64-bit
+  hash collision cannot draw the wrong geometry.
+
+### Also fixed
+
+- `Image.Scroll` and `Image.CopyFrom` bump `Epoch`/`Dirty`; a GPU texture
+  cached for that image is no longer stale after an in-place pixel move.
+- `Context` recycles clip-mask buffers that were never handed to a device.
+
 ## 0.10.0 — 2026-09-12
 
 Dirty `DrawScene`, GPU partial present, and pane-group layer replay —
