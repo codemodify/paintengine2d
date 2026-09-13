@@ -13,13 +13,207 @@ type Node interface {
 // then blits the layer through Xform and does not walk Children — a
 // splitter drag is two blits, not two pane rasters. An opaque integer
 // translation uses [Image.CopyFrom] (memcpy) on the CPU backend.
+//
+// # Clipping
+//
+// Clip / ClipPath are expressed in the *parent's* coordinate space: they are
+// applied with the matrix accumulated down to this node's parent and are
+// deliberately NOT multiplied by this node's own Xform. A scroll view is
+// therefore a fixed viewport (the group Clip) plus a moving content
+// transform (Xform): changing Xform slides the children under a clip that
+// stays where it is.
+//
+// Clips recorded into the children (the per-op [Clip] a [Context] resolves)
+// belong to the content and do move with Xform, as they always have. Put the
+// viewport on the group, not on the ops, when the group will be re-attached
+// with a different Xform.
+//
+// The zero value has no clip, so scenes built before v0.11 replay unchanged.
+//
+// A ClipPath is rasterized to a mask and cached on the node, so a Scene is
+// replayed by one goroutine at a time (as it always was).
 type GroupNode struct {
-	ID          uint64
-	Xform       Matrix
-	Children    []Node
+	ID       uint64
+	Xform    Matrix
+	Children []Node
+
+	// Clip is a parent-space rectangle. It only applies when HasClip is
+	// set, so an empty Clip can legitimately mean "nothing is visible".
+	Clip    Rect
+	HasClip bool
+	// ClipPath, when non-nil, further restricts the group to the interior
+	// of a parent-space path (rounded viewports, circular avatars). It is
+	// rasterized to a coverage mask and cached until the path, the rule or
+	// the parent matrix changes.
+	ClipPath *Path
+	ClipRule FillRule
+
 	Layer       *Image
 	LayerOrigin Point
 	LayerOpaque bool
+
+	clipCache groupClipCache
+}
+
+// groupClipCache memoizes the rasterized GroupNode.ClipPath mask.
+type groupClipCache struct {
+	valid bool
+	m     Matrix
+	path  *Path
+	rule  FillRule
+	clip  Clip
+}
+
+// SetClipRect sets a parent-space rectangular clip on the group.
+func (g *GroupNode) SetClipRect(r Rect) {
+	if g == nil {
+		return
+	}
+	g.Clip = r.Canon()
+	g.HasClip = true
+	g.clipCache.valid = false
+}
+
+// SetClipPath sets a parent-space path clip (intersected with Clip when
+// HasClip is set). A nil path clears it.
+func (g *GroupNode) SetClipPath(p *Path, rule FillRule) {
+	if g == nil {
+		return
+	}
+	g.ClipPath = p
+	g.ClipRule = rule
+	g.clipCache.valid = false
+}
+
+// ClearClip removes the group clip.
+func (g *GroupNode) ClearClip() {
+	if g == nil {
+		return
+	}
+	g.Clip = Rect{}
+	g.HasClip = false
+	g.ClipPath = nil
+	g.clipCache = groupClipCache{}
+}
+
+// hasGroupClip reports whether g restricts its children.
+func (g *GroupNode) hasGroupClip() bool {
+	return g != nil && (g.HasClip || g.ClipPath != nil)
+}
+
+// deviceClipFor resolves the group clip into device space under m (the
+// matrix accumulated down to the group's parent).
+func (g *GroupNode) deviceClipFor(m Matrix, w, h int) Clip {
+	var out Clip
+	if g.HasClip {
+		out.HasScissor = true
+		out.Scissor = m.TransformRect(g.Clip)
+	}
+	if g.ClipPath == nil || g.ClipPath.Empty() {
+		return out
+	}
+	if c := &g.clipCache; c.valid && c.path == g.ClipPath && c.rule == g.ClipRule && c.m == m {
+		return intersectClips(out, c.clip)
+	}
+	mask := rasterizeClipPath(g.ClipPath, g.ClipRule, m, w, h)
+	g.clipCache = groupClipCache{valid: true, m: m, path: g.ClipPath, rule: g.ClipRule, clip: mask}
+	return intersectClips(out, mask)
+}
+
+// rasterizeClipPath renders path (user space, mapped by m) into an 8-bit
+// coverage clip in device space.
+func rasterizeClipPath(path *Path, rule FillRule, m Matrix, w, h int) Clip {
+	box := m.TransformRect(path.Bounds()).Inset(-2)
+	box = box.Intersect(XYWH(0, 0, float32(w), float32(h)))
+	if box.Empty() {
+		return Clip{HasScissor: true}
+	}
+	x0, y0, x1, y1 := clampPixelBounds(box, w, h)
+	if x0 >= x1 || y0 >= y1 {
+		return Clip{HasScissor: true}
+	}
+	bw, bh := x1-x0, y1-y0
+	img := NewImage(bw, bh)
+	dev := NewCPUDevice(img)
+	paint := Fill(White)
+	paint.FillRule = rule
+	dev.Fill(path, Translation(-float32(x0), -float32(y0)).Mul(m), paint, Clip{})
+	mask := make([]byte, bw*bh)
+	for i := range mask {
+		mask[i] = img.Pix[i*4+3]
+	}
+	return Clip{
+		HasScissor: true,
+		Scissor:    XYWH(float32(x0), float32(y0), float32(bw), float32(bh)),
+		Mask:       mask,
+		MaskX:      x0,
+		MaskY:      y0,
+		MaskW:      bw,
+		MaskH:      bh,
+	}
+}
+
+// intersectClips combines two device-space clips.
+func intersectClips(a, b Clip) Clip {
+	switch {
+	case a.Mask == nil && b.Mask == nil:
+		if !a.HasScissor {
+			return b
+		}
+		if !b.HasScissor {
+			return a
+		}
+		return Clip{HasScissor: true, Scissor: a.Scissor.Intersect(b.Scissor)}
+	case a.Mask == nil:
+		if a.HasScissor {
+			b.Scissor = scissorOf(b).Intersect(a.Scissor)
+			b.HasScissor = true
+		}
+		return b
+	case b.Mask == nil:
+		if b.HasScissor {
+			a.Scissor = scissorOf(a).Intersect(b.Scissor)
+			a.HasScissor = true
+		}
+		return a
+	}
+	// Two masks: multiply them over the intersection box.
+	box := scissorOf(a).Intersect(scissorOf(b))
+	if box.Empty() {
+		return Clip{HasScissor: true}
+	}
+	x0, y0, x1, y1 := box.IntBounds()
+	bw, bh := x1-x0, y1-y0
+	if bw <= 0 || bh <= 0 {
+		return Clip{HasScissor: true}
+	}
+	mask := make([]byte, bw*bh)
+	for y := 0; y < bh; y++ {
+		for x := 0; x < bw; x++ {
+			va := a.maskAt(x0+x, y0+y)
+			vb := b.maskAt(x0+x, y0+y)
+			mask[y*bw+x] = uint8((uint16(va)*uint16(vb) + 127) / 255)
+		}
+	}
+	return Clip{
+		HasScissor: true,
+		Scissor:    XYWH(float32(x0), float32(y0), float32(bw), float32(bh)),
+		Mask:       mask,
+		MaskX:      x0,
+		MaskY:      y0,
+		MaskW:      bw,
+		MaskH:      bh,
+	}
+}
+
+func scissorOf(c Clip) Rect {
+	if c.HasScissor {
+		return c.Scissor
+	}
+	if c.Mask != nil {
+		return XYWH(float32(c.MaskX), float32(c.MaskY), float32(c.MaskW), float32(c.MaskH))
+	}
+	return Rect{Min: Point{-1e9, -1e9}, Max: Point{1e9, 1e9}}
 }
 
 func (*GroupNode) sceneNode() {}
@@ -105,19 +299,24 @@ func DrawSceneRects(s *Scene, dev Device, rects []Rect) {
 	DrawSceneDamage(s, dev, &d)
 }
 
-// DrawSceneDamage replays s onto the union of dirty (device pixels).
+// DrawSceneDamage replays s onto the dirty boxes (device pixels).
 //
 // A nil dirty is a full replay. An empty dirty is a no-op (and tells
 // [GPUDevice.Present] to skip the swap). Recorded [Device.Clear] becomes
-// [ClearRect] of each dirty box so a hover does not wipe the surface.
+// [ClearRect] of the dirty box, so a hover does not wipe the surface.
 //
-// Ops whose device bounds miss every dirty rect are skipped. Surviving
-// ops get an extra device scissor of [Damage.Bounds]. Groups with a
-// [GroupNode.Layer] are blitted; their children are not walked.
+// The scene is replayed once per dirty rectangle, each pass scissored to
+// that one box. Replaying once against the union would composite a
+// translucent op twice into the gaps between boxes (it is painted for every
+// box it overlaps, but only the boxes are erased first).
+//
+// Ops whose device bounds miss the box are skipped, as are whole groups —
+// except groups that contain a recorded [Device.Clear], which must run so
+// the background is restored where a widget was removed.
 //
 // After replay, a [GPUDevice] stores the dirty list so [GPUDevice.Present]
 // / [Context.Present] can swap-with-damage without a second copy of the
-// rects. uitoolkit should call this instead of Clear + [DrawScene].
+// rects.
 func DrawSceneDamage(s *Scene, dev Device, dirty *Damage) {
 	if s == nil || s.Root == nil || dev == nil {
 		return
@@ -126,15 +325,27 @@ func DrawSceneDamage(s *Scene, dev Device, dirty *Damage) {
 		setPresentDamage(dev, emptyPresent)
 		return
 	}
-	w := sceneWalker{dev: dev, dirty: dirty}
-	if g, ok := dev.(*GPUDevice); ok && GPUAvailable() {
-		w.batch = g
+	var batch rectBatcher
+	if g, ok := dev.(*GPUDevice); ok && gpuUsable(g) {
+		batch = g
 	}
-	w.walk(s.Root, Identity())
-	w.flush()
+	clears := make(map[*GroupNode]bool)
 	if dirty == nil {
+		w := sceneWalker{dev: dev, batch: batch, clears: clears}
+		w.walk(s.Root, Identity())
+		w.flush()
 		setPresentDamage(dev, nil)
 		return
+	}
+	// Snapshot: a Device call must not observe a half-mutated list.
+	rects := append([]Rect(nil), dirty.Rects...)
+	for _, r := range rects {
+		if r.Empty() {
+			continue
+		}
+		w := sceneWalker{dev: dev, batch: batch, clears: clears, rect: r, hasRect: true}
+		w.walk(s.Root, Identity())
+		w.flush()
 	}
 	setPresentDamage(dev, dirty.Rects)
 }
@@ -149,13 +360,19 @@ func setPresentDamage(dev Device, rects []Rect) {
 }
 
 type sceneWalker struct {
-	dev   Device
-	batch rectBatcher
-	dirty *Damage
-	rects []Rect
-	color Color
-	clip  Clip
-	has   bool
+	dev     Device
+	batch   rectBatcher
+	rect    Rect
+	hasRect bool
+	// gclip is the accumulated device-space clip from enclosing
+	// [GroupNode.Clip] / ClipPath.
+	gclip  Clip
+	hasG   bool
+	clears map[*GroupNode]bool
+	rects  []Rect
+	color  Color
+	clip   Clip
+	has    bool
 }
 
 func (w *sceneWalker) walk(n Node, acc Matrix) {
@@ -165,15 +382,31 @@ func (w *sceneWalker) walk(n Node, acc Matrix) {
 			return
 		}
 		xf := acc.Mul(t.Xform)
+		savedClip, savedHas := w.gclip, w.hasG
+		if t.hasGroupClip() {
+			dw, dh := w.dev.Size()
+			gc := t.deviceClipFor(acc, dw, dh)
+			if w.hasG {
+				w.gclip = intersectClips(w.gclip, gc)
+			} else {
+				w.gclip, w.hasG = gc, true
+			}
+			if w.hasRect && w.gclip.HasScissor && !w.gclip.Scissor.Overlaps(w.rect) {
+				w.gclip, w.hasG = savedClip, savedHas
+				return
+			}
+			w.flush()
+		}
 		if t.Layer != nil {
 			w.blitLayer(t, xf)
-			return
+		} else if !w.skipGroup(t, xf) {
+			for _, ch := range t.Children {
+				w.walk(ch, xf)
+			}
 		}
-		if w.skipGroup(t, xf) {
-			return
-		}
-		for _, ch := range t.Children {
-			w.walk(ch, xf)
+		if t.hasGroupClip() {
+			w.flush()
+			w.gclip, w.hasG = savedClip, savedHas
 		}
 	case *drawOp:
 		if t == nil {
@@ -204,8 +437,15 @@ func (w *sceneWalker) walk(n Node, acc Matrix) {
 	}
 }
 
+// skipGroup reports whether the whole subtree misses the dirty box. A
+// group that contains a recorded Clear is never skipped: the Clear repaints
+// the background where an op used to be, and its bounds are not part of
+// GroupLocalBounds.
 func (w *sceneWalker) skipGroup(g *GroupNode, xf Matrix) bool {
-	if w.dirty == nil {
+	if !w.hasRect {
+		return false
+	}
+	if w.groupHasClear(g) {
 		return false
 	}
 	b := GroupLocalBounds(g)
@@ -215,40 +455,89 @@ func (w *sceneWalker) skipGroup(g *GroupNode, xf Matrix) bool {
 	return w.skipRect(xf.TransformRect(b))
 }
 
-func (w *sceneWalker) skipRect(r Rect) bool {
-	if w.dirty == nil {
+// groupHasClear reports (memoized) whether the subtree records a Clear.
+func (w *sceneWalker) groupHasClear(g *GroupNode) bool {
+	if g == nil {
 		return false
 	}
-	return !w.dirty.Overlaps(r)
+	if w.clears != nil {
+		if v, ok := w.clears[g]; ok {
+			return v
+		}
+	}
+	found := false
+	for _, ch := range g.Children {
+		switch t := ch.(type) {
+		case *drawOp:
+			if t != nil && t.kind == opClear {
+				found = true
+			}
+		case *GroupNode:
+			if t != nil && t.Layer == nil && w.groupHasClear(t) {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if w.clears != nil {
+		w.clears[g] = found
+	}
+	return found
 }
 
+func (w *sceneWalker) skipRect(r Rect) bool {
+	if !w.hasRect {
+		return false
+	}
+	return !r.Overlaps(w.rect)
+}
+
+// clipOp resolves a recorded op clip: mapped by the accumulated matrix,
+// intersected with any enclosing group clip and with the dirty box.
 func (w *sceneWalker) clipOp(c Clip, acc Matrix) Clip {
 	clip := mapClip(c, acc)
-	if w.dirty == nil {
+	if w.hasG {
+		clip = intersectClips(clip, w.gclip)
+	}
+	if !w.hasRect {
 		return clip
 	}
-	return clip.IntersectDevice(w.dirty.Bounds())
+	return clip.IntersectDevice(w.rect)
 }
 
 func (w *sceneWalker) clear(c Color) {
 	w.flush()
-	if w.dirty == nil {
+	if !w.hasRect {
+		if w.hasG {
+			w.clearBox(scissorOf(w.gclip), c)
+			return
+		}
 		w.dev.Clear(c)
 		return
 	}
-	if clr, ok := w.dev.(clearRector); ok {
-		for _, r := range w.dirty.Rects {
-			clr.ClearRect(r, c)
-		}
+	box := w.rect
+	if w.hasG {
+		box = box.Intersect(scissorOf(w.gclip))
+	}
+	w.clearBox(box, c)
+}
+
+func (w *sceneWalker) clearBox(r Rect, c Color) {
+	if r.Empty() {
 		return
 	}
-	p := Fill(c)
-	for _, r := range w.dirty.Rects {
-		if r.Empty() {
-			continue
-		}
-		w.dev.Fill(RectPath(r), Identity(), p, Clip{HasScissor: true, Scissor: r})
+	if w.hasG && w.gclip.Mask != nil {
+		// A masked group clip cannot be honoured by a raw ClearRect.
+		w.dev.Fill(RectPath(r), Identity(), Fill(c), intersectClips(Clip{HasScissor: true, Scissor: r}, w.gclip))
+		return
 	}
+	if clr, ok := w.dev.(clearRector); ok {
+		clr.ClearRect(r, c)
+		return
+	}
+	w.dev.Fill(RectPath(r), Identity(), Fill(c), Clip{HasScissor: true, Scissor: r})
 }
 
 func (w *sceneWalker) blitLayer(g *GroupNode, xf Matrix) {
@@ -263,13 +552,14 @@ func (w *sceneWalker) blitLayer(g *GroupNode, xf Matrix) {
 		return
 	}
 	w.flush()
-	if g.LayerOpaque && w.copyOpaqueLayer(src, dest, xform) {
+	clip := w.clipOp(Clip{}, Identity())
+	if g.LayerOpaque && clip.Mask == nil && w.copyOpaqueLayer(src, dest, xform, clip) {
 		return
 	}
-	w.dev.Blit(src, srcR, srcR, xform, Paint{Color: White, Filter: FilterNearest}, w.clipOp(Clip{}, Identity()))
+	w.dev.Blit(src, srcR, srcR, xform, Paint{Color: White, Filter: FilterNearest}, clip)
 }
 
-func (w *sceneWalker) copyOpaqueLayer(src *Image, dest Rect, xform Matrix) bool {
+func (w *sceneWalker) copyOpaqueLayer(src *Image, dest Rect, xform Matrix, clip Clip) bool {
 	cpu, ok := w.dev.(*CPUDevice)
 	if !ok || cpu.img == nil || !xform.IsTranslation() {
 		return false
@@ -279,21 +569,17 @@ func (w *sceneWalker) copyOpaqueLayer(src *Image, dest Rect, xform Matrix) bool 
 	if !okX || !okY {
 		return false
 	}
-	if w.dirty != nil {
-		copied := false
-		for _, r := range w.dirty.Rects {
-			part := dest.Intersect(r)
-			if part.Empty() {
-				continue
-			}
-			ox := int(part.Min.X) - dx
-			oy := int(part.Min.Y) - dy
-			cpu.img.CopyFrom(src, XYWH(float32(ox), float32(oy), part.Dx(), part.Dy()), int(part.Min.X), int(part.Min.Y))
-			copied = true
-		}
-		return copied
+	part := dest
+	if clip.HasScissor {
+		part = part.Intersect(clip.Scissor)
 	}
-	cpu.img.CopyFrom(src, XYWH(0, 0, float32(src.Width), float32(src.Height)), dx, dy)
+	if part.Empty() {
+		return true
+	}
+	px0, py0, px1, py1 := part.IntBounds()
+	ox := px0 - dx
+	oy := py0 - dy
+	cpu.img.CopyFrom(src, XYWH(float32(ox), float32(oy), float32(px1-px0), float32(py1-py0)), px0, py0)
 	return true
 }
 
@@ -336,8 +622,7 @@ func opaqueAxisAlignedRect(path *Path, xform Matrix, paint Paint, clip Clip) boo
 	if paint.Shader != nil || clip.Mask != nil || !xform.IsAxisAligned() || !isClosedRectPath(path) {
 		return false
 	}
-	_, _, _, a := paint.Color.Premul8()
-	return a == 255
+	return paint.isOpaqueSolid()
 }
 
 func clipBatchEqual(a, b Clip) bool {
@@ -350,6 +635,13 @@ func clipBatchEqual(a, b Clip) bool {
 	return true
 }
 
+// mapClip moves a recorded op clip by the accumulated group transform.
+// The clip belongs to the content, so it travels with it.
+//
+// A coverage mask is resampled when the transform is not an integer
+// translation; before v0.11 a fractional translation truncated the offset
+// (off-by-one) and any rotation/scale dropped the mask entirely, which
+// un-clipped the op.
 func mapClip(c Clip, m Matrix) Clip {
 	if m.IsIdentity() {
 		return c
@@ -357,12 +649,54 @@ func mapClip(c Clip, m Matrix) Clip {
 	if c.HasScissor {
 		c.Scissor = m.TransformRect(c.Scissor)
 	}
-	if c.Mask != nil && m.IsTranslation() {
-		c.MaskX += int(m.E)
-		c.MaskY += int(m.F)
-	} else if c.Mask != nil {
-		c.Mask = nil
+	if c.Mask == nil {
+		return c
 	}
+	if m.IsTranslation() {
+		if dx, ok := nearInt(m.E); ok {
+			if dy, ok2 := nearInt(m.F); ok2 {
+				c.MaskX += dx
+				c.MaskY += dy
+				return c
+			}
+		}
+	}
+	return resampleMask(c, m)
+}
+
+// resampleMask rebuilds a coverage mask under an arbitrary affine map.
+func resampleMask(c Clip, m Matrix) Clip {
+	inv, ok := m.Invert()
+	if !ok {
+		c.Mask = nil
+		return c
+	}
+	src := XYWH(float32(c.MaskX), float32(c.MaskY), float32(c.MaskW), float32(c.MaskH))
+	dst := m.TransformRect(src)
+	x0, y0, x1, y1 := dst.IntBounds()
+	bw, bh := x1-x0, y1-y0
+	if bw <= 0 || bh <= 0 || bw*bh > 1<<24 {
+		c.Mask = nil
+		return c
+	}
+	out := make([]byte, bw*bh)
+	for y := 0; y < bh; y++ {
+		for x := 0; x < bw; x++ {
+			p := inv.Transform(Pt(float32(x0+x)+0.5, float32(y0+y)+0.5))
+			sx := int(p.X)
+			sy := int(p.Y)
+			if p.X < 0 {
+				sx--
+			}
+			if p.Y < 0 {
+				sy--
+			}
+			out[y*bw+x] = c.maskAt(sx, sy)
+		}
+	}
+	c.Mask = out
+	c.MaskX, c.MaskY = x0, y0
+	c.MaskW, c.MaskH = bw, bh
 	return c
 }
 
@@ -389,9 +723,13 @@ func opContentBounds(op *drawOp, acc Matrix) Rect {
 	}
 }
 
+// opDeviceBounds is the op's device box padded by one pixel. The padding
+// covers the AA fringe for geometry and, for blits, the pixel a fractional
+// destination edge still touches — a dirty rect is rounded outward, so an
+// exact float test would skip a blit whose pixels the rect erased.
 func opDeviceBounds(op *drawOp, acc Matrix) Rect {
 	b := opContentBounds(op, acc)
-	if b.Empty() || (op != nil && op.kind == opBlit) {
+	if b.Empty() {
 		return b
 	}
 	return b.Inset(-1)
