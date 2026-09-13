@@ -59,16 +59,157 @@ type isect struct {
 }
 
 // Rasterizer holds reusable scratch for scanline AA.
+//
+// Edges are kept in an active-edge list: [Rasterizer.ResetEdges] sorts edge
+// indices by top Y once, and each [Rasterizer.CoverageRow] admits the edges
+// that start on the row and retires the ones that ended. Sequential rows
+// therefore cost O(active) instead of O(all edges); a random-access row
+// rebuilds the active list from the sorted order.
 type Rasterizer struct {
 	edges  []Edge
+	slope  []float32 // dx/dy per edge (0 for horizontal-ish)
+	order  []int32   // edge indices sorted by Y0
+	active []int32
 	isects []isect
 	cover  []uint16
+
+	cursor  int // next index into order not yet admitted
+	nextRow int // row the active list is primed for
+	primed  bool
 }
 
 // ResetEdges replaces the active edge list. The slice is borrowed until the
 // next ResetEdges; CoverageRow only reads it.
 func (r *Rasterizer) ResetEdges(edges []Edge) {
 	r.edges = edges
+	r.primed = false
+	r.cursor = 0
+	r.active = r.active[:0]
+
+	n := len(edges)
+	if cap(r.slope) < n {
+		r.slope = make([]float32, n)
+	} else {
+		r.slope = r.slope[:n]
+	}
+	if cap(r.order) < n {
+		r.order = make([]int32, n)
+	} else {
+		r.order = r.order[:n]
+	}
+	for i := range edges {
+		e := &edges[i]
+		dy := e.Y1 - e.Y0
+		if abs32(dy) < 1e-20 {
+			r.slope[i] = 0
+		} else {
+			r.slope[i] = (e.X1 - e.X0) / dy
+		}
+		r.order[i] = int32(i)
+	}
+	sortByTopY(r.order, edges)
+}
+
+// sortByTopY sorts edge indices by Edge.Y0. Hand-rolled so the hot path
+// stays allocation-free (sort.Slice escapes a closure and a swapper).
+func sortByTopY(order []int32, edges []Edge) {
+	for len(order) > 12 {
+		// Median-of-three pivot, Hoare partition.
+		lo, mid, hi := 0, len(order)/2, len(order)-1
+		if edges[order[mid]].Y0 < edges[order[lo]].Y0 {
+			order[mid], order[lo] = order[lo], order[mid]
+		}
+		if edges[order[hi]].Y0 < edges[order[mid]].Y0 {
+			order[hi], order[mid] = order[mid], order[hi]
+			if edges[order[mid]].Y0 < edges[order[lo]].Y0 {
+				order[mid], order[lo] = order[lo], order[mid]
+			}
+		}
+		pivot := edges[order[mid]].Y0
+		i, j := 0, len(order)-1
+		for i <= j {
+			for edges[order[i]].Y0 < pivot {
+				i++
+			}
+			for edges[order[j]].Y0 > pivot {
+				j--
+			}
+			if i <= j {
+				order[i], order[j] = order[j], order[i]
+				i++
+				j--
+			}
+		}
+		// Recurse into the smaller side, loop on the larger.
+		if j+1 < len(order)-i {
+			sortByTopY(order[:j+1], edges)
+			order = order[i:]
+		} else {
+			sortByTopY(order[i:], edges)
+			order = order[:j+1]
+		}
+	}
+	for i := 1; i < len(order); i++ {
+		v := order[i]
+		key := edges[v].Y0
+		j := i
+		for j > 0 && edges[order[j-1]].Y0 > key {
+			order[j] = order[j-1]
+			j--
+		}
+		order[j] = v
+	}
+}
+
+// xAtFast is [Edge.xAt] using the precomputed slope.
+func (r *Rasterizer) xAtFast(i int32, y float32) float32 {
+	e := &r.edges[i]
+	x := e.X0 + (y-e.Y0)*r.slope[i]
+	if x != x { // NaN
+		return e.X0
+	}
+	return x
+}
+
+// syncActive makes the active list valid for pixel row y.
+func (r *Rasterizer) syncActive(y int) {
+	if !r.primed || y < r.nextRow {
+		r.cursor = 0
+		r.active = r.active[:0]
+		r.primed = true
+	} else if y > r.nextRow {
+		// Skipped rows: retire everything that ended before y.
+		r.retire(float32(y))
+	}
+	r.nextRow = y + 1
+
+	y0 := float32(y)
+	y1 := y0 + 1
+	// Admit edges whose top is above the bottom of this row.
+	for r.cursor < len(r.order) {
+		i := r.order[r.cursor]
+		if r.edges[i].Y0 >= y1 {
+			break
+		}
+		r.cursor++
+		if r.edges[i].Y1 <= y0 {
+			continue // already finished before this row
+		}
+		r.active = append(r.active, i)
+	}
+	r.retire(y0)
+}
+
+// retire drops active edges whose bottom is at or above y.
+func (r *Rasterizer) retire(y float32) {
+	n := 0
+	for _, i := range r.active {
+		if r.edges[i].Y1 > y {
+			r.active[n] = i
+			n++
+		}
+	}
+	r.active = r.active[:n]
 }
 
 // CoverageRow rasterizes one pixel row y into cover[0:width] as 0..255
@@ -94,31 +235,22 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 	// Only the clip span is read by the blender; skip O(surface width) work.
 	clear(r.cover[clipX0:clipX1])
 
-	y0 := float32(y)
-	y1 := y0 + 1
-	// Quick reject: no edge overlaps this row.
-	any := false
-	for i := range r.edges {
-		e := &r.edges[i]
-		if e.Y1 > y0 && e.Y0 < y1 {
-			any = true
-			break
-		}
-	}
-	if !any {
+	r.syncActive(y)
+	if len(r.active) == 0 {
 		return r.cover
 	}
 
+	y0 := float32(y)
 	const weight = 256 / SamplesY // 32
 	for s := 0; s < SamplesY; s++ {
 		yy := y0 + (float32(s)+0.5)/SamplesY
 		r.isects = r.isects[:0]
-		for i := range r.edges {
+		for _, i := range r.active {
 			e := &r.edges[i]
 			if yy < e.Y0 || yy >= e.Y1 {
 				continue
 			}
-			r.isects = append(r.isects, isect{x: e.xAt(yy), dir: e.Dir})
+			r.isects = append(r.isects, isect{x: r.xAtFast(i, yy), dir: e.Dir})
 		}
 		if len(r.isects) < 2 {
 			continue
@@ -238,8 +370,19 @@ func filled(winding, rule int) bool {
 	return winding != 0
 }
 
+// addCov adds v to cover[i], saturating instead of wrapping. Spans inside a
+// single sample line are disjoint so the sum is bounded in practice, but a
+// pathological self-overlapping path must not wrap to a dark pixel.
+func addCov(cover []uint16, i int, v uint16) {
+	c := cover[i] + v
+	if c < cover[i] {
+		c = 0xFFFF
+	}
+	cover[i] = c
+}
+
 func addSpan(cover []uint16, x0, x1 float32, weight, clipX0, clipX1 int) {
-	if x1 <= x0 {
+	if !(x1 > x0) { // NaN-safe
 		return
 	}
 	if x1 <= float32(clipX0) || x0 >= float32(clipX1) {
@@ -255,12 +398,12 @@ func addSpan(cover []uint16, x0, x1 float32, weight, clipX0, clipX1 int) {
 	ix1 := floor32(x1)
 	if ix0 == ix1 {
 		if ix0 >= clipX0 && ix0 < clipX1 {
-			cover[ix0] += uint16((x1 - x0) * float32(weight))
+			addCov(cover, ix0, uint16((x1-x0)*float32(weight)))
 		}
 		return
 	}
 	if ix0 >= clipX0 && ix0 < clipX1 {
-		cover[ix0] += uint16((float32(ix0) + 1 - x0) * float32(weight))
+		addCov(cover, ix0, uint16((float32(ix0)+1-x0)*float32(weight)))
 	}
 	start := ix0 + 1
 	if start < clipX0 {
@@ -271,12 +414,12 @@ func addSpan(cover []uint16, x0, x1 float32, weight, clipX0, clipX1 int) {
 		end = clipX1
 	}
 	for x := start; x < end; x++ {
-		cover[x] += uint16(weight)
+		addCov(cover, x, uint16(weight))
 	}
 	if ix1 >= clipX0 && ix1 < clipX1 {
 		frac := x1 - float32(ix1)
 		if frac > 0 {
-			cover[ix1] += uint16(frac * float32(weight))
+			addCov(cover, ix1, uint16(frac*float32(weight)))
 		}
 	}
 }
