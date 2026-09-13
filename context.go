@@ -21,7 +21,35 @@ type Context struct {
 	// maskScratch is the coverage bytes built by ClipPath before they
 	// are copied into the current clip (so a previous mask can be read).
 	maskScratch []byte
-	labels      labelCache
+	// maskPool holds clip masks that were dropped by Restore and were
+	// never handed to a Device, so ClipPath can reuse the allocation.
+	maskPool [][]byte
+	labels   labelCache
+}
+
+// maxMaskPool bounds the recycled clip-mask buffers held per Context.
+const maxMaskPool = 4
+
+func (c *Context) putMask(b []byte) {
+	if b == nil || len(c.maskPool) >= maxMaskPool {
+		return
+	}
+	c.maskPool = append(c.maskPool, b)
+}
+
+func (c *Context) getMask(n int) []byte {
+	best := -1
+	for i, b := range c.maskPool {
+		if cap(b) >= n && (best < 0 || cap(b) < cap(c.maskPool[best])) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return make([]byte, n)
+	}
+	b := c.maskPool[best]
+	c.maskPool = append(c.maskPool[:best], c.maskPool[best+1:]...)
+	return b[:n]
 }
 
 type ctxState struct {
@@ -99,8 +127,18 @@ func (c *Context) Restore() {
 	if n == 0 {
 		return
 	}
+	old := c.cur.clip
 	c.cur = c.stack[n-1]
 	c.stack = c.stack[:n-1]
+	// A mask that was never shared with a Device (or a saved state) dies
+	// here; keep the allocation for the next ClipPath.
+	if old.mask != nil && !old.maskShared && !sameMask(old.mask, c.cur.clip.mask) {
+		c.putMask(old.mask)
+	}
+}
+
+func sameMask(a, b []byte) bool {
+	return len(a) > 0 && len(b) > 0 && &a[0] == &b[0]
 }
 
 // SaveCount is the number of unmatched [Save] calls (0 at the root).
@@ -370,7 +408,7 @@ func (c *Context) ClipPathRule(path *Path, rule FillRule) {
 	}
 	dst := c.cur.clip.mask
 	if c.cur.clip.maskShared || cap(dst) < need {
-		dst = make([]byte, need)
+		dst = c.getMask(need)
 	} else {
 		dst = dst[:need]
 	}
@@ -440,7 +478,17 @@ func (c *Context) tightenScissorFromMask() {
 	}
 }
 
-func (c *Context) clip() Clip { return c.cur.clip.export() }
+// clip exports the resolved clip for a Device call. The mask buffer escapes
+// to the Device (a [Recorder] retains it), so it is marked shared: the next
+// [Context.ClipPath] allocates instead of overwriting bytes someone else may
+// still be reading. That is what makes recorded clip masks safe to share by
+// reference instead of deep-copying them per draw op.
+func (c *Context) clip() Clip {
+	if c.cur.clip.mask != nil {
+		c.cur.clip.maskShared = true
+	}
+	return c.cur.clip.export()
+}
 
 // SetDamage attaches a dirty-rect tracker. Draw calls record device-space
 // bounds; the UI layer presents [Damage.Rects] or [Damage.Bounds].
@@ -506,6 +554,36 @@ func (c *Context) ClearRect(r Rect, col Color) {
 		return
 	}
 	c.DrawRect(r, Fill(col))
+}
+
+// BeginFrame lets the backend prepare for a batch of draws (the GPU device
+// binds its EGL context once instead of per call). Always pair it with
+// [Context.EndFrame]; both are no-ops on the CPU backend.
+func (c *Context) BeginFrame() error {
+	if f, ok := c.dev.(interface{ BeginFrame() error }); ok {
+		return f.BeginFrame()
+	}
+	return nil
+}
+
+// EndFrame closes a [Context.BeginFrame] and returns the backend error, if
+// any (see [Context.Err]).
+func (c *Context) EndFrame() error {
+	if f, ok := c.dev.(interface{ EndFrame() error }); ok {
+		return f.EndFrame()
+	}
+	return nil
+}
+
+// Err reports a sticky backend error — a lost GPU context, a device used
+// from the wrong OS thread, a failed swap. Draw calls cannot return errors,
+// so they record them on the device; check this once per frame instead of
+// wondering why nothing appeared. The CPU backend never errors.
+func (c *Context) Err() error {
+	if e, ok := c.dev.(interface{ Err() error }); ok {
+		return e.Err()
+	}
+	return nil
 }
 
 // Present flushes the backend (EGL swap on [GPUDevice]; no-op on CPU).
