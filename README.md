@@ -26,7 +26,7 @@ _ = img.WritePNGFile("out.png")
 ```
 
 ```bash
-go get github.com/codemodify/paintengine2d@v0.10.0
+go get github.com/codemodify/paintengine2d@v0.11.0
 ```
 
 **UI-foundation ready.** This module is the paint layer a separate UI
@@ -79,7 +79,7 @@ go run ./examples/paths  -o paths.png
 
 ## Feature matrix
 
-| Feature | v0.10.0 | Notes |
+| Feature | v0.11.0 | Notes |
 | --- | :---: | --- |
 | Path + rect / round-rect / ellipse / arc / curves | **done** | `DrawArc` / `AddArc` |
 | Affine transforms + save/restore | **done** | |
@@ -96,8 +96,10 @@ go run ./examples/paths  -o paths.png
 | Text hooks (`FontAtlas`, `GlyphRun`, `Shaper`) | **done** | warm `DrawLabel` 0-alloc; [NullShaper] + 5×7 atlas |
 | Scanline AA | **done** | |
 | `Device` + `CPUDevice` | **done** | |
-| `GPUDevice` (Linux EGL/GLES2) | **done** | AA-rect quad; tess cache; swap-with-damage; partial_update blit |
-| Retained `Scene` / `Recorder` / `DrawScene` | **done** | `DrawSceneDamage`; `BakeGroup` layer blit; GPU rect batch |
+| `GPUDevice` (Linux EGL/GLES2) | **done** | MSAA target + analytic rect fringe; tess cache; refcounted EGL display; buffer-age partial present; LRU texture cache |
+| Retained `Scene` / `Recorder` / `DrawScene` | **done** | `DrawSceneDamage` (per-dirty-box replay); parent-space `GroupNode.Clip`; `BakeGroup` layer blit; GPU rect batch |
+| External EGL (adopt / share / ARGB) | **done** | `EGLAdopt`, `EGLNative.Share` / `.Alpha` |
+| dmabuf / `EGLImage` import, fences | deferred | see the TODO in `device.go` |
 | SIMD / HDR / PDF | deferred | |
 | X11 / Wayland / Win32 windowing | **other repos** | |
 | Widgets, IME, a11y, WM policy | **other repos** | |
@@ -327,20 +329,27 @@ a Gio CPU bake-off on their scenes. Re-run on your machine.
 | `BenchmarkImageBlitNearestUI` | 32→32 1:1 | 5.9 µs | **0** |
 | `BenchmarkDrawLabel` | 80×20 | 1.2 µs | **0** (was 4) |
 | `BenchmarkDrawLabelWarm` | same label on 1920×1080 | 2.2 µs | **0** |
-| `BenchmarkChromeCPU` | 640×420 UI chrome | 6.24 ms | 18 |
-| `BenchmarkChromeGPU` | same scene, EGL/llvmpipe | **1.61 ms** | 46 |
+| `BenchmarkChromeCPU` | 640×420 UI chrome | 3.97 ms | 13 |
+| `BenchmarkChromeGPU` | same scene, EGL/llvmpipe, 4× MSAA | 7.49 ms | 35 |
+| `BenchmarkChromeGPU` | same scene, `UITK_PAINT_MSAA=0` | 3.18 ms | 36 |
+| `BenchmarkDrawSceneFull` | retained replay | 387 µs | 1 |
+| `BenchmarkDrawSceneDamageHover` | one dirty row | 6.2 µs | 3 |
 
 `BenchmarkChromeGPU` is the same titlebar / buttons / track / focus-ring
-sheet as a toolkit frame. On this host's Mesa llvmpipe it is ~4× faster
-than CPU scanline. A real GPU should widen that gap; `UITK_PAINT=cpu`
-keeps the old path.
+sheet as a toolkit frame. These numbers come from Mesa **llvmpipe** — a
+software GL stack, where multisampling costs literally 4× the fill and the
+GPU path cannot win. On real hardware MSAA is close to free and the GPU
+path pulls ahead; measure on your target before choosing. `UITK_PAINT=cpu`
+keeps the scanline path, `UITK_PAINT_MSAA=0` keeps the GPU path without the
+multisample target (rect fills stay analytically anti-aliased either way).
 
 Enable GPU:
 
 ```bash
-UITK_PAINT=auto   # default: GPU if EGL init works, else CPU
-UITK_PAINT=gpu    # require GPU (OpenSurface errors without EGL)
-UITK_PAINT=cpu    # force CPU (also the CGO_ENABLED=0 path)
+UITK_PAINT=auto     # default: GPU if EGL init works, else CPU
+UITK_PAINT=gpu      # require GPU (OpenSurface errors without EGL)
+UITK_PAINT=cpu      # force CPU (also the CGO_ENABLED=0 path)
+UITK_PAINT_MSAA=0   # GPU without multisampling
 ```
 
 ```go
@@ -421,7 +430,7 @@ can vendor, test, and eventually retarget (`Device`) without linking C++.
 
 An honest list — this is a CPU paint library, not Skia:
 
-| Skia / typical canvas | paintengine2d v0.10.0 (dirty DrawScene) |
+| Skia / typical canvas | paintengine2d v0.11.0 (correctness pass) |
 | --- | --- |
 | GPU backends (GL/Vulkan/Metal) | Linux EGL/GLES2 `GPUDevice`; no Vulkan/Metal |
 | HarfBuzz / OpenType / IME | atlas blit + `Shaper` hook only |
@@ -431,7 +440,7 @@ An honest list — this is a CPU paint library, not Skia:
 | Path effects beyond dash | no (no path morph, no discrete) |
 | SaveLayer / offscreen filters | `BakeGroup` layer blit (no filters) |
 | Color spaces, ICC, HDR, wide gamut | 8-bit sRGB premul |
-| Hairline raster, MSAA, analytic coverage | 8× scanline AA |
+| Hairline raster, analytic coverage everywhere | 8× scanline AA (CPU); 4× MSAA + analytic rect fringe (GPU) |
 | SIMD / JIT (Blend2D-class) | portable Go |
 | SVG / PDF / picture playback | retained `Scene` replay (not SVG/PDF) |
 
@@ -484,17 +493,26 @@ surface. Additive changes are fine; renaming or changing meaning is not.
 - Queries: `Size`, `DeviceClipBounds`, `LocalClipBounds`, `QuickReject`,
   `ClipEmpty`, `ClipDeviceRect`, `ClipToDamage`
 - Present: `Present` / `PresentRects` / `PresentDamage` (GPU swap-with-damage
-  + EGL_KHR_partial_update blit; CPU no-op). `GPUDevice.SetPresentDamage`
-  is filled by [DrawSceneDamage]
+  + EGL_KHR_partial_update blit honouring buffer age; CPU no-op).
+  `GPUDevice.SetPresentDamage` is filled by [DrawSceneDamage]
+- Frames and errors: `Context.BeginFrame` / `EndFrame` / `Err` (a GPU device
+  records a lost context, a failed swap or wrong-thread use; draw calls
+  cannot return errors)
+- Layer alpha: `Paint.Opacity` (zero means opaque). A tint with
+  `Color.A == 0` paints nothing; only the zero-value `Color` means untinted
 - Partial erase: `ClearRect` (honors clip). `Clear` still ignores clip.
 - Scroll / layer: `Scroll`, `CopyImage`, `Image.Scroll` / `CopyFrom`
 - Atlas: `Image.TouchRect` / `BumpRect` (GPU sub-upload)
 - Resize: `Context.SyncSize`; `CPUSurface.Resize` keeps the same Device
 - [Device] + [CPUDevice] + [GPUDevice] / [Surface] / [OpenSurface]
 - [Scene] / [Recorder] / [GroupNode] / [DrawScene] / [DrawSceneDamage] /
-  [DrawSceneRects] / [BakeGroup]
+  [DrawSceneRects] / [BakeGroup]; `GroupNode.Clip` / `SetClipRect` /
+  `SetClipPath` is a **parent-space** clip, so a scroll offset in `Xform`
+  slides content under a viewport that stays put
 - [Image] premul RGBA8888; [NewImage] packed; [WrapImage] packed or padded
-  stride; padding bytes are never written
+  stride; padding bytes are never written; `Image.ID` / `UID` is the
+  process-unique identity the GPU texture cache keys on
+  (`GPUDevice.ReleaseImage` / `SetTextureBudget`)
 - [Path] verbs, `AddRect` / `AddRoundRect` / `AddEllipse` / `AddCircle` /
   `AddArc`
 - [Paint]: solid color, [LinearGradient] / [RadialGradient], tile modes,
