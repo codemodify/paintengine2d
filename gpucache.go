@@ -43,6 +43,31 @@ type tessEntry struct {
 	closed   []bool
 	verts    []float32
 	box      Rect
+	// verbs/pts identify the path this entry was built from. The key holds
+	// a 64-bit hash; two different paths that collide must not swap
+	// geometry, so a hit is verified against the real path.
+	verbs []Verb
+	pts   []Point
+}
+
+func (e *tessEntry) matches(path *Path) bool {
+	if e == nil || path == nil {
+		return false
+	}
+	if len(e.verbs) != len(path.verbs) || len(e.pts) != len(path.pts) {
+		return false
+	}
+	for i := range e.verbs {
+		if e.verbs[i] != path.verbs[i] {
+			return false
+		}
+	}
+	for i := range e.pts {
+		if e.pts[i] != path.pts[i] {
+			return false
+		}
+	}
+	return true
 }
 
 const tessCacheCap = 256
@@ -76,26 +101,37 @@ func (c *tessCache) put(k tessKey, e *tessEntry) {
 
 func (c *tessCache) lookupFill(path *Path, xform Matrix, rule FillRule) *tessEntry {
 	k := fillTessKey(path, xform, rule)
-	if e := c.get(k); e != nil {
+	if e := c.get(k); e != nil && e.matches(path) {
 		return e
 	}
 	e := c.buildFill(path, xform)
 	if e == nil {
 		return nil
 	}
+	e.keepPath(path)
 	c.put(k, e)
 	return e
 }
 
+// keepPath stores the identifying path so a hash collision is detected.
+func (e *tessEntry) keepPath(path *Path) {
+	if e == nil || path == nil {
+		return
+	}
+	e.verbs = append(e.verbs[:0], path.verbs...)
+	e.pts = append(e.pts[:0], path.pts...)
+}
+
 func (c *tessCache) lookupStroke(path *Path, xform Matrix, st Stroke) *tessEntry {
 	k := strokeTessKey(path, xform, st)
-	if e := c.get(k); e != nil {
+	if e := c.get(k); e != nil && e.matches(path) {
 		return e
 	}
 	e := c.buildStroke(path, xform, st)
 	if e == nil {
 		return nil
 	}
+	e.keepPath(path)
 	c.put(k, e)
 	return e
 }

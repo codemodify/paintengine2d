@@ -18,6 +18,24 @@ const (
 	PaintAuto = "auto"
 )
 
+// EnvPaintMSAA turns the GPU multisample render target off ("0", "off",
+// "false"). MSAA is on by default where the driver supports it: without it
+// a GPU path fill has hard, aliased edges while the CPU backend
+// anti-aliases. Turning it off trades edge quality for fill rate — worth it
+// on a software GL stack (llvmpipe), where 4 samples cost 4x the pixels.
+const EnvPaintMSAA = "UITK_PAINT_MSAA"
+
+// MSAAEnabled reports whether the GPU backend should build a multisample
+// target (the [EnvPaintMSAA] default is on).
+func MSAAEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvPaintMSAA))) {
+	case "0", "off", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
 // BackendKind identifies the active paint implementation.
 type BackendKind uint8
 
