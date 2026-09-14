@@ -320,7 +320,12 @@ type GPUDevice struct {
 	// EGL_KHR_partial_update and a buffer age of N, the back buffer holds
 	// the frame from N swaps ago, so the blit must repaint this frame's
 	// damage plus the previous N-1 frames'.
+	// ageFull marks slots whose frame repainted the whole surface (a
+	// full present, or unknown history after a resize): a back buffer
+	// older than such a frame can only be repaired by a full blit.
 	ageRing  [maxBufferAge][]Rect
+	ageFull  [maxBufferAge]bool
+	ageReset bool // next recorded frame follows a reset: count it as full
 	ageIdx   int
 	ageScrat []Rect
 
@@ -759,6 +764,7 @@ func (d *GPUDevice) bindLocs() {
 
 func (d *GPUDevice) allocTarget() error {
 	d.freeTarget()
+	d.resetDamageHistory()
 	C.glGenFramebuffers(1, &d.fbo)
 	C.glGenTextures(1, &d.color)
 	C.glBindTexture(C.GL_TEXTURE_2D, d.color)
@@ -1450,7 +1456,12 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 			// Unknown or older than our history: repaint everything.
 			partialBlit = false
 		case age > 1:
-			blitRects = d.damageForAge(rects, age)
+			var full bool
+			if blitRects, full = d.damageForAge(rects, age); full {
+				// The back buffer predates a full frame: nothing short of
+				// a full blit brings it up to date.
+				partialBlit = false
+			}
 		}
 	}
 	n := d.packEGLDamage(blitRects)
@@ -1504,25 +1515,49 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 	return nil
 }
 
-// recordFrameDamage pushes this frame's damage onto the age ring.
+// recordFrameDamage pushes this frame's damage onto the age ring. A nil or
+// empty list is a full-surface present and is remembered as such — it used
+// to be stored as "no damage", so the next partial present into an older
+// back buffer repaired only its own rects and the rest of the window showed
+// the frame from before the full repaint (menus vanishing, closed dialogs
+// reappearing).
 func (d *GPUDevice) recordFrameDamage(rects []Rect) {
 	d.ageIdx = (d.ageIdx + 1) % maxBufferAge
 	slot := d.ageRing[d.ageIdx][:0]
 	slot = append(slot, rects...)
 	d.ageRing[d.ageIdx] = slot
+	d.ageFull[d.ageIdx] = len(rects) == 0 || d.ageReset
+	d.ageReset = false
+}
+
+// resetDamageHistory forgets every recorded frame: after a resize or target
+// reallocation no back buffer can be repaired from the ring.
+func (d *GPUDevice) resetDamageHistory() {
+	for i := range d.ageRing {
+		d.ageRing[i] = d.ageRing[i][:0]
+		d.ageFull[i] = true
+	}
+	// The first frame on a fresh target is a repaint of everything, whatever
+	// rects the caller passed.
+	d.ageReset = true
 }
 
 // damageForAge unions this frame's damage with the damage of the age-1
-// previous frames, which the back buffer has not seen.
-func (d *GPUDevice) damageForAge(rects []Rect, age int) []Rect {
-	out := d.ageScrat[:0]
+// previous frames, which the back buffer has not seen. full reports that
+// one of those frames repainted everything, so only a full blit is sound.
+func (d *GPUDevice) damageForAge(rects []Rect, age int) (out []Rect, full bool) {
+	out = d.ageScrat[:0]
 	out = append(out, rects...)
 	for i := 1; i < age && i < maxBufferAge; i++ {
 		idx := ((d.ageIdx-i+1)%maxBufferAge + maxBufferAge) % maxBufferAge
+		if d.ageFull[idx] {
+			d.ageScrat = out
+			return nil, true
+		}
 		out = append(out, d.ageRing[idx]...)
 	}
 	d.ageScrat = out
-	return out
+	return out, false
 }
 
 // PresentDamageAge reports the buffer age EGL last returned for the window
