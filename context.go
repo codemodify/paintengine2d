@@ -745,24 +745,82 @@ func (c *Context) DrawLayer(bounds Rect, alpha float32, draw func(*Context)) {
 		c.Restore()
 		return
 	}
+	img, at, ok := c.layer(bounds, draw)
+	if ok {
+		c.composite(img, at, a)
+	}
+}
+
+// DrawCrossFade paints the blend of two drawings over bounds: from at 1−t
+// and to at t, each rendered on its own transparent layer and mixed pixel
+// by pixel before the result goes over the destination once (CSS
+// cross-fade()). Unlike painting to over from, a state that paints little
+// (a flat tool button at rest) fades the other one out, and the background
+// never shows through two opaque faces mid-way.
+func (c *Context) DrawCrossFade(bounds Rect, t float32, from, to func(*Context)) {
+	t = clamp32(t, 0, 1)
+	switch {
+	case t <= 0 && from != nil:
+		c.Save()
+		from(c)
+		c.Restore()
+		return
+	case t >= 1 && to != nil:
+		c.Save()
+		to(c)
+		c.Restore()
+		return
+	}
+	a, at, okA := c.layer(bounds, from)
+	b, _, okB := c.layer(bounds, to)
+	if !okA || !okB {
+		return
+	}
+	// a = a·(1−t) + b·t, premultiplied, in place.
+	k := uint32(t*256 + 0.5)
+	pa, pb := a.Pix, b.Pix
+	for i := range pa {
+		pa[i] = byte((uint32(pa[i])*(256-k) + uint32(pb[i])*k) >> 8)
+	}
+	c.composite(a, at, 1-c.cur.fade)
+}
+
+// layer renders draw into a transparent device-resolution image over
+// bounds (user space), clipped to the current clip; at is its device
+// position.
+func (c *Context) layer(bounds Rect, draw func(*Context)) (*Image, Point, bool) {
 	dev := c.cur.xform.TransformRect(bounds).Intersect(c.DeviceClipBounds())
 	if dev.Empty() {
-		return
+		return nil, Point{}, false
 	}
 	x0, y0 := float32(math.Floor(float64(dev.Min.X))), float32(math.Floor(float64(dev.Min.Y)))
 	x1, y1 := float32(math.Ceil(float64(dev.Max.X))), float32(math.Ceil(float64(dev.Max.Y)))
 	w, h := int(x1-x0), int(y1-y0)
 	if w < 1 || h < 1 || w > maxLayerDim || h > maxLayerDim {
-		return
+		return nil, Point{}, false
 	}
 	img := NewImage(w, h)
-	lc := NewContext(img)
-	lc.SetMatrix(Translation(-x0, -y0).Mul(c.cur.xform))
-	draw(lc)
+	if draw != nil {
+		lc := NewContext(img)
+		lc.SetMatrix(Translation(-x0, -y0).Mul(c.cur.xform))
+		draw(lc)
+	}
+	return img, Pt(x0, y0), true
+}
+
+// composite draws a layer image at device position at with opacity a.
+func (c *Context) composite(img *Image, at Point, a float32) {
+	if a <= 0 {
+		return
+	}
 	c.Save()
 	c.cur.xform = Identity()
 	c.cur.fade = 0
-	c.DrawImageRectPaint(img, XYWH(0, 0, float32(w), float32(h)), XYWH(x0, y0, float32(w), float32(h)), Paint{Opacity: a})
+	p := Paint{}
+	if a < 1 {
+		p.Opacity = a
+	}
+	c.DrawImageRectPaint(img, XYWH(0, 0, float32(img.Width), float32(img.Height)), XYWH(at.X, at.Y, float32(img.Width), float32(img.Height)), p)
 	c.Restore()
 }
 
