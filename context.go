@@ -1,5 +1,7 @@
 package paintengine2d
 
+import "math"
+
 // Context is the public 2D canvas — the analogue of Skia's SkCanvas and
 // JUCE's Graphics. It owns a transform / clip / paint stack and forwards
 // drawing to a [Device].
@@ -721,6 +723,48 @@ func (c *Context) SetAlpha(a float32) { c.cur.fade = 1 - clamp32(a, 0, 1) }
 
 // Alpha is the global alpha [Context.SetAlpha] set (1 by default).
 func (c *Context) Alpha() float32 { return 1 - c.cur.fade }
+
+// DrawLayer paints draw into an offscreen layer over bounds (user space)
+// and composites the layer at alpha: group opacity (CSS opacity, Qt's
+// QGraphicsOpacityEffect). Inside the layer, draws overlap and blend as
+// usual; the finished result fades as one, which per-draw [SetAlpha]
+// cannot give a many-layered face. The layer is a CPU image at device
+// resolution, clipped to the current clip: meant for controls and popups,
+// not whole windows. Recorded scenes keep the composited image.
+func (c *Context) DrawLayer(bounds Rect, alpha float32, draw func(*Context)) {
+	if draw == nil {
+		return
+	}
+	a := clamp32(alpha, 0, 1) * (1 - c.cur.fade)
+	if a <= 0 {
+		return
+	}
+	if a >= 1 {
+		c.Save()
+		draw(c)
+		c.Restore()
+		return
+	}
+	dev := c.cur.xform.TransformRect(bounds).Intersect(c.DeviceClipBounds())
+	if dev.Empty() {
+		return
+	}
+	x0, y0 := float32(math.Floor(float64(dev.Min.X))), float32(math.Floor(float64(dev.Min.Y)))
+	x1, y1 := float32(math.Ceil(float64(dev.Max.X))), float32(math.Ceil(float64(dev.Max.Y)))
+	w, h := int(x1-x0), int(y1-y0)
+	if w < 1 || h < 1 || w > maxLayerDim || h > maxLayerDim {
+		return
+	}
+	img := NewImage(w, h)
+	lc := NewContext(img)
+	lc.SetMatrix(Translation(-x0, -y0).Mul(c.cur.xform))
+	draw(lc)
+	c.Save()
+	c.cur.xform = Identity()
+	c.cur.fade = 0
+	c.DrawImageRectPaint(img, XYWH(0, 0, float32(w), float32(h)), XYWH(x0, y0, float32(w), float32(h)), Paint{Opacity: a})
+	c.Restore()
+}
 
 // faded folds the global alpha into paint; false when it paints nothing.
 func (c *Context) faded(p Paint) (Paint, bool) {
