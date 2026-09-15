@@ -12,6 +12,31 @@ type Recorder struct {
 	// intern deduplicates recorded path snapshots: a list of identical
 	// rows records one Path, not one per row.
 	intern map[uint64][]*Path
+	// paths, when set, keeps snapshots across frames (see [PathCache]).
+	paths *PathCache
+	// slab hands out draw ops in small blocks instead of one allocation
+	// per op.
+	slab []drawOp
+}
+
+// opSlab is the draw ops per block: small, so a cached group that outlives
+// its frame pins little memory.
+const opSlab = 32
+
+func (r *Recorder) newOp() *drawOp {
+	if len(r.slab) == cap(r.slab) {
+		r.slab = make([]drawOp, 0, opSlab)
+	}
+	r.slab = r.slab[:len(r.slab)+1]
+	return &r.slab[len(r.slab)-1]
+}
+
+// UsePathCache makes the recorder intern paths in c, which outlives it:
+// shapes recorded every frame are then cloned once, not once per frame.
+func (r *Recorder) UsePathCache(c *PathCache) {
+	if r != nil {
+		r.paths = c
+	}
 }
 
 // NewRecorder starts an empty recording of a w×h target.
@@ -86,6 +111,9 @@ func (r *Recorder) Attach(g *GroupNode) {
 // recorded earlier in this scene. Recorded paths are never mutated, so
 // sharing is safe and a repeated widget shape costs one clone per scene.
 func (r *Recorder) internPath(path *Path) *Path {
+	if r.paths != nil {
+		return r.paths.intern(path)
+	}
 	h := hashPath(path)
 	if r.intern == nil {
 		r.intern = make(map[uint64][]*Path)
@@ -148,7 +176,9 @@ func (r *Recorder) Clear(c Color) {
 	if r == nil {
 		return
 	}
-	r.add(&drawOp{kind: opClear, color: c})
+	op := r.newOp()
+	*op = drawOp{kind: opClear, color: c}
+	r.add(op)
 }
 
 // Fill implements [Device].
@@ -156,13 +186,15 @@ func (r *Recorder) Fill(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if r == nil || path == nil || path.Empty() || !xform.Finite() {
 		return
 	}
-	r.add(&drawOp{
+	op := r.newOp()
+	*op = drawOp{
 		kind:  opFill,
 		path:  r.internPath(path),
 		xform: xform,
 		paint: clonePaint(paint),
 		clip:  cloneClip(clip),
-	})
+	}
+	r.add(op)
 }
 
 // Stroke implements [Device].
@@ -170,13 +202,15 @@ func (r *Recorder) Stroke(path *Path, xform Matrix, paint Paint, clip Clip) {
 	if r == nil || path == nil || path.Empty() || !xform.Finite() {
 		return
 	}
-	r.add(&drawOp{
+	op := r.newOp()
+	*op = drawOp{
 		kind:  opStroke,
 		path:  r.internPath(path),
 		xform: xform,
 		paint: clonePaint(paint),
 		clip:  cloneClip(clip),
-	})
+	}
+	r.add(op)
 }
 
 // Blit implements [Device].
@@ -184,7 +218,8 @@ func (r *Recorder) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint P
 	if r == nil || src == nil || dstRect.Empty() || !xform.Finite() {
 		return
 	}
-	r.add(&drawOp{
+	op := r.newOp()
+	*op = drawOp{
 		kind:  opBlit,
 		src:   src,
 		srcR:  srcRect,
@@ -192,7 +227,8 @@ func (r *Recorder) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint P
 		xform: xform,
 		paint: clonePaint(paint),
 		clip:  cloneClip(clip),
-	})
+	}
+	r.add(op)
 }
 
 // cloneClip retains the recorded clip. The coverage mask is shared by
