@@ -320,6 +320,9 @@ type GPUDevice struct {
 	scrollTW, scrollTH int
 	blur               gpuBlur // backdrop blur program and scratch targets
 
+	// pixels is the CPU copy Snapshot reads the frame into, made by the
+	// first Snapshot: a device-size image (12.5 MB at 2240×1400) that only
+	// screenshots and a fallback to the CPU need.
 	pixels    *Image
 	readDirty bool
 
@@ -799,7 +802,7 @@ func (d *GPUDevice) allocTarget() error {
 	}
 	C.glBindFramebuffer(C.GL_FRAMEBUFFER, d.drawFBO())
 	C.glViewport(0, 0, C.GLsizei(d.w), C.GLsizei(d.h))
-	d.pixels = NewImage(d.w, d.h)
+	d.pixels = nil // made at the new size by the next Snapshot
 	d.readDirty = true
 	d.msDirty = false
 	return nil
