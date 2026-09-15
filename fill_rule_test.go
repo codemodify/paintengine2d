@@ -142,3 +142,26 @@ func TestQuadAndCubicFillClosed(t *testing.T) {
 	ctx2.DrawPath(c, Fill(White))
 	assertAlpha(t, img2, 24, 16, 200, 255, "cubic interior")
 }
+
+// An open stroke with square caps used to leave its outline unclosed (the
+// cap starts on its extended corner), which filled a band from the start
+// cap across to the far arm of a check mark.
+func TestSquareCapOpenStrokeLeavesNoBand(t *testing.T) {
+	img := NewImage(16, 16)
+	ctx := NewContext(img)
+	p := NewPath()
+	p.MoveTo(3.92, 7.92)
+	p.LineTo(7.04, 11.04)
+	p.LineTo(12.88, 5.12)
+	ctx.DrawPath(p, Paint{Color: RGB(0, 0, 0), Style: StyleStroke, Stroke: Stroke{Width: 2, Cap: CapSquare, Join: JoinMiter, MiterLimit: 4}})
+	// Inside the V, above the corner: nothing may be painted there.
+	for _, pt := range [][2]int{{7, 6}, {6, 7}, {8, 6}} {
+		if _, _, _, a := img.PremulAt(pt[0], pt[1]); a > 8 {
+			t.Fatalf("pixel %v inside the check mark is painted (alpha %d)", pt, a)
+		}
+	}
+	// The square cap still extends past the start point.
+	if _, _, _, a := img.PremulAt(3, 6); a == 0 {
+		t.Fatal("the square start cap is missing")
+	}
+}

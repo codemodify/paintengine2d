@@ -55,6 +55,8 @@ static const char *pe_fs =
 	"uniform mat3 u_inv;\n"
 	"uniform vec4 u_tint;\n"
 	"uniform int u_cov;\n"
+	"uniform vec2 u_patOrigin;\n"
+	"uniform vec2 u_patSize;\n"
 	"float tileT(float t) {\n"
 	"  if (u_tile == 1) {\n"
 	"    t = t - floor(t);\n"
@@ -80,7 +82,7 @@ static const char *pe_fs =
 	"    float len2 = dot(d, d);\n"
 	"    float t = 0.0;\n"
 	"    if (len2 > 1e-12) t = dot(p - u_g0, d) / len2;\n"
-	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5));\n"
+	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5)) * u_tint.a;\n"
 	"  } else if (u_mode == 2) {\n"
 	"    vec2 p = toUser(v_pos);\n"
 	"    float dist = length(p - u_center);\n"
@@ -88,7 +90,10 @@ static const char *pe_fs =
 	"    float t = 0.0;\n"
 	"    if (span < 1e-8) t = dist <= u_radius ? 0.0 : 1.0;\n"
 	"    else t = (dist - u_inner) / span;\n"
-	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5));\n"
+	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5)) * u_tint.a;\n"
+	"  } else if (u_mode == 4) {\n"
+	"    vec2 t = mod(toUser(v_pos) - u_patOrigin, u_patSize) / u_patSize;\n"
+	"    c = texture2D(u_tex, t) * u_tint.a;\n"
 	"  } else if (u_mode == 3) {\n"
 	"    c = texture2D(u_tex, v_uv);\n"
 	"    c.rgb *= u_tint.rgb;\n"
@@ -295,6 +300,7 @@ type GPUDevice struct {
 	locMaskR, locG0, locG1, locCenter C.GLint
 	locRad, locInner, locTile, locInv C.GLint
 	locTint, locCov                   C.GLint
+	locPatO, locPatS                  C.GLint
 
 	window             bool
 	ownEGL             bool
@@ -312,6 +318,7 @@ type GPUDevice struct {
 	info               string
 	scrollTex          C.GLuint
 	scrollTW, scrollTH int
+	blur               gpuBlur // backdrop blur program and scratch targets
 
 	pixels    *Image
 	readDirty bool
@@ -320,7 +327,12 @@ type GPUDevice struct {
 	// EGL_KHR_partial_update and a buffer age of N, the back buffer holds
 	// the frame from N swaps ago, so the blit must repaint this frame's
 	// damage plus the previous N-1 frames'.
+	// ageFull marks slots whose frame repainted the whole surface (a
+	// full present, or unknown history after a resize): a back buffer
+	// older than such a frame can only be repaired by a full blit.
 	ageRing  [maxBufferAge][]Rect
+	ageFull  [maxBufferAge]bool
+	ageReset bool // next recorded frame follows a reset: count it as full
 	ageIdx   int
 	ageScrat []Rect
 
@@ -755,10 +767,13 @@ func (d *GPUDevice) bindLocs() {
 	d.locInv = loc(p, "u_inv")
 	d.locTint = loc(p, "u_tint")
 	d.locCov = loc(p, "u_cov")
+	d.locPatO = loc(p, "u_patOrigin")
+	d.locPatS = loc(p, "u_patSize")
 }
 
 func (d *GPUDevice) allocTarget() error {
 	d.freeTarget()
+	d.resetDamageHistory()
 	C.glGenFramebuffers(1, &d.fbo)
 	C.glGenTextures(1, &d.color)
 	C.glBindTexture(C.GL_TEXTURE_2D, d.color)
@@ -870,6 +885,7 @@ func (d *GPUDevice) freeTarget() {
 
 func (d *GPUDevice) destroyGL() {
 	d.freeTarget()
+	d.freeBlur()
 	if d.vbo != 0 {
 		C.glDeleteBuffers(1, &d.vbo)
 		d.vbo = 0
@@ -1450,7 +1466,12 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 			// Unknown or older than our history: repaint everything.
 			partialBlit = false
 		case age > 1:
-			blitRects = d.damageForAge(rects, age)
+			var full bool
+			if blitRects, full = d.damageForAge(rects, age); full {
+				// The back buffer predates a full frame: nothing short of
+				// a full blit brings it up to date.
+				partialBlit = false
+			}
 		}
 	}
 	n := d.packEGLDamage(blitRects)
@@ -1504,25 +1525,49 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 	return nil
 }
 
-// recordFrameDamage pushes this frame's damage onto the age ring.
+// recordFrameDamage pushes this frame's damage onto the age ring. A nil or
+// empty list is a full-surface present and is remembered as such — it used
+// to be stored as "no damage", so the next partial present into an older
+// back buffer repaired only its own rects and the rest of the window showed
+// the frame from before the full repaint (menus vanishing, closed dialogs
+// reappearing).
 func (d *GPUDevice) recordFrameDamage(rects []Rect) {
 	d.ageIdx = (d.ageIdx + 1) % maxBufferAge
 	slot := d.ageRing[d.ageIdx][:0]
 	slot = append(slot, rects...)
 	d.ageRing[d.ageIdx] = slot
+	d.ageFull[d.ageIdx] = len(rects) == 0 || d.ageReset
+	d.ageReset = false
+}
+
+// resetDamageHistory forgets every recorded frame: after a resize or target
+// reallocation no back buffer can be repaired from the ring.
+func (d *GPUDevice) resetDamageHistory() {
+	for i := range d.ageRing {
+		d.ageRing[i] = d.ageRing[i][:0]
+		d.ageFull[i] = true
+	}
+	// The first frame on a fresh target is a repaint of everything, whatever
+	// rects the caller passed.
+	d.ageReset = true
 }
 
 // damageForAge unions this frame's damage with the damage of the age-1
-// previous frames, which the back buffer has not seen.
-func (d *GPUDevice) damageForAge(rects []Rect, age int) []Rect {
-	out := d.ageScrat[:0]
+// previous frames, which the back buffer has not seen. full reports that
+// one of those frames repainted everything, so only a full blit is sound.
+func (d *GPUDevice) damageForAge(rects []Rect, age int) (out []Rect, full bool) {
+	out = d.ageScrat[:0]
 	out = append(out, rects...)
 	for i := 1; i < age && i < maxBufferAge; i++ {
 		idx := ((d.ageIdx-i+1)%maxBufferAge + maxBufferAge) % maxBufferAge
+		if d.ageFull[idx] {
+			d.ageScrat = out
+			return nil, true
+		}
 		out = append(out, d.ageRing[idx]...)
 	}
 	d.ageScrat = out
-	return out
+	return out, false
 }
 
 // PresentDamageAge reports the buffer age EGL last returned for the window
@@ -1743,6 +1788,8 @@ func (d *GPUDevice) shaderMode(paint Paint) int {
 		return 1
 	case RadialGradient:
 		return 2
+	case ImagePattern:
+		return 4
 	default:
 		return 0
 	}
@@ -1765,7 +1812,9 @@ func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) 
 		C.GLfloat(inv.E), C.GLfloat(inv.F), 1,
 	}
 	C.glUniformMatrix3fv(d.locInv, 1, C.GL_FALSE, &m[0])
-	C.glUniform4f(d.locTint, 1, 1, 1, 1)
+	// Gradients take the paint's layer alpha through the tint (solid colours
+	// fold it into u_color; a blit sets its own tint after this).
+	C.glUniform4f(d.locTint, 1, 1, 1, C.GLfloat(paint.LayerAlpha()))
 
 	useMask := 0
 	if clip.Mask != nil && clip.MaskW > 0 && clip.MaskH > 0 {
@@ -1779,6 +1828,18 @@ func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) 
 	C.glUniform1i(d.locUseM, C.GLint(useMask))
 
 	switch g := paint.Shader.(type) {
+	case ImagePattern:
+		// The pattern tiles in the shader (mod), so a texture of any size
+		// repeats under GLES2; nearest keeps dithers crisp.
+		if g.Image != nil && g.Image.Width > 0 && g.Image.Height > 0 {
+			tex := d.uploadImage(g.Image, FilterNearest)
+			s := g.scale()
+			C.glUniform2f(d.locPatO, C.GLfloat(g.Origin.X), C.GLfloat(g.Origin.Y))
+			C.glUniform2f(d.locPatS, C.GLfloat(float32(g.Image.Width)*s), C.GLfloat(float32(g.Image.Height)*s))
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, tex)
+			C.glUniform1i(d.locTex, 0)
+		}
 	case LinearGradient:
 		d.bakeStops(g.Stops)
 		C.glUniform2f(d.locG0, C.GLfloat(g.Start.X), C.GLfloat(g.Start.Y))

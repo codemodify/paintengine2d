@@ -18,10 +18,13 @@ func TestPresentDamageAgeRing(t *testing.T) {
 	d.recordFrameDamage(f3)
 
 	cur := []Rect{XYWH(60, 0, 10, 10)}
-	if got := d.damageForAge(cur, 1); len(got) != 1 {
-		t.Fatalf("age 1 repaints only this frame, got %d rects", len(got))
+	if got, full := d.damageForAge(cur, 1); len(got) != 1 || full {
+		t.Fatalf("age 1 repaints only this frame, got %d rects (full=%v)", len(got), full)
 	}
-	got := d.damageForAge(cur, 3)
+	got, full := d.damageForAge(cur, 3)
+	if full {
+		t.Fatal("no full frame in the history, yet a full blit was requested")
+	}
 	if len(got) != 3 {
 		t.Fatalf("age 3 should repaint 3 frames of damage, got %d: %+v", len(got), got)
 	}
@@ -33,8 +36,59 @@ func TestPresentDamageAgeRing(t *testing.T) {
 		t.Fatalf("age-3 damage union %+v; want the last two frames plus the current one", u)
 	}
 	// Never reaches past the ring.
-	if n := len(d.damageForAge(cur, maxBufferAge+5)); n > maxBufferAge {
-		t.Fatalf("age beyond the ring returned %d frames", n)
+	if got, _ := d.damageForAge(cur, maxBufferAge+5); len(got) > maxBufferAge {
+		t.Fatalf("age beyond the ring returned %d frames", len(got))
+	}
+}
+
+// A full-surface present (nil rects) must be remembered as "everything
+// changed". It used to be recorded as no damage, so the next partial present
+// into a 2-frame-old back buffer repaired only its own rects and the rest of
+// the window reverted to the frame before the full repaint — the gallery's
+// vanishing menus and reappearing dialogs on KDE Wayland.
+func TestPresentDamageAgeRingFullFrame(t *testing.T) {
+	d := &GPUDevice{}
+	hover := []Rect{XYWH(0, 0, 50, 20)}
+	d.recordFrameDamage(hover) // frame 1: partial (hover)
+	d.recordFrameDamage(nil)   // frame 2: full (menu opened)
+
+	cur := []Rect{XYWH(0, 0, 100, 30)} // frame 3: partial (title release)
+	if got, full := d.damageForAge(cur, 1); full || len(got) != 1 {
+		t.Fatalf("age 1 buffer is the full frame's own result: want only this frame's rects, got %d (full=%v)", len(got), full)
+	}
+	if _, full := d.damageForAge(cur, 2); !full {
+		t.Fatal("age 2 buffer predates the full frame: a full blit is required")
+	}
+	if _, full := d.damageForAge(cur, 3); !full {
+		t.Fatal("age 3 buffer predates the full frame: a full blit is required")
+	}
+
+	// The full frame ages out of reach after enough partial frames.
+	for i := 0; i < maxBufferAge; i++ {
+		d.recordFrameDamage(hover)
+	}
+	if _, full := d.damageForAge(cur, 3); full {
+		t.Fatal("full frame fell out of the window but still forces a full blit")
+	}
+
+	// A reset (resize / new target) leaves no repairable history.
+	d.resetDamageHistory()
+	if _, full := d.damageForAge(cur, 2); !full {
+		t.Fatal("after a reset every aged buffer needs a full blit")
+	}
+	d.recordFrameDamage(hover) // first frame after the reset counts as full
+	if _, full := d.damageForAge(cur, 2); !full {
+		t.Fatal("age 2 reaches back past the reset: still needs a full blit")
+	}
+	if _, full := d.damageForAge(cur, 1); full {
+		t.Fatal("age 1 buffer is the previous frame's own result")
+	}
+	d.recordFrameDamage(hover)
+	if _, full := d.damageForAge(cur, 2); full {
+		t.Fatal("age 2 only spans a partial frame now")
+	}
+	if _, full := d.damageForAge(cur, 3); !full {
+		t.Fatal("age 3 spans the first post-reset frame: needs a full blit")
 	}
 }
 
