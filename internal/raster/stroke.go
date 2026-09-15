@@ -236,6 +236,13 @@ func (p *StrokePool) strokeContour(pts []Vec2, closed bool, half float32, opt St
 		for i := len(right) - 1; i >= 0; i-- {
 			outline = append(outline, right[i])
 		}
+		// Close the outline: a square start cap begins on its extended
+		// corner, not on right[0], and an outline left open there filled a
+		// band from the cap across to the far arm (butt and round caps
+		// happened to start and end on the same point).
+		if len(outline) > 0 && outline[len(outline)-1] != outline[0] {
+			outline = append(outline, outline[0])
+		}
 		p.left, p.right, p.outline = left, right, outline
 		return outline
 	}

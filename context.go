@@ -1,5 +1,7 @@
 package paintengine2d
 
+import "math"
+
 // Context is the public 2D canvas — the analogue of Skia's SkCanvas and
 // JUCE's Graphics. It owns a transform / clip / paint stack and forwards
 // drawing to a [Device].
@@ -57,6 +59,9 @@ type ctxState struct {
 	clip   deviceClip
 	fill   Paint
 	stroke Paint
+	// fade is 1 − the global alpha ([Context.SetAlpha]), so the zero state
+	// paints opaque.
+	fade float32
 }
 
 // NewContext draws into img using the CPU backend.
@@ -710,9 +715,135 @@ func (c *Context) markDirtyDevice() {
 	c.damage.Add(XYWH(0, 0, float32(w), float32(h)))
 }
 
+// SetAlpha multiplies the opacity of every later draw by a (Canvas 2D's
+// globalAlpha): chrome that fades in and out, such as a transient scroll
+// bar or a toast, needs no offscreen layer. Draws that overlap still blend
+// with each other, unlike a group layer. Save and Restore keep it.
+func (c *Context) SetAlpha(a float32) { c.cur.fade = 1 - clamp32(a, 0, 1) }
+
+// Alpha is the global alpha [Context.SetAlpha] set (1 by default).
+func (c *Context) Alpha() float32 { return 1 - c.cur.fade }
+
+// DrawLayer paints draw into an offscreen layer over bounds (user space)
+// and composites the layer at alpha: group opacity (CSS opacity, Qt's
+// QGraphicsOpacityEffect). Inside the layer, draws overlap and blend as
+// usual; the finished result fades as one, which per-draw [SetAlpha]
+// cannot give a many-layered face. The layer is a CPU image at device
+// resolution, clipped to the current clip: meant for controls and popups,
+// not whole windows. Recorded scenes keep the composited image.
+func (c *Context) DrawLayer(bounds Rect, alpha float32, draw func(*Context)) {
+	if draw == nil {
+		return
+	}
+	a := clamp32(alpha, 0, 1) * (1 - c.cur.fade)
+	if a <= 0 {
+		return
+	}
+	if a >= 1 {
+		c.Save()
+		draw(c)
+		c.Restore()
+		return
+	}
+	img, at, ok := c.layer(bounds, draw)
+	if ok {
+		c.composite(img, at, a)
+	}
+}
+
+// DrawCrossFade paints the blend of two drawings over bounds: from at 1−t
+// and to at t, each rendered on its own transparent layer and mixed pixel
+// by pixel before the result goes over the destination once (CSS
+// cross-fade()). Unlike painting to over from, a state that paints little
+// (a flat tool button at rest) fades the other one out, and the background
+// never shows through two opaque faces mid-way.
+func (c *Context) DrawCrossFade(bounds Rect, t float32, from, to func(*Context)) {
+	t = clamp32(t, 0, 1)
+	switch {
+	case t <= 0 && from != nil:
+		c.Save()
+		from(c)
+		c.Restore()
+		return
+	case t >= 1 && to != nil:
+		c.Save()
+		to(c)
+		c.Restore()
+		return
+	}
+	a, at, okA := c.layer(bounds, from)
+	b, _, okB := c.layer(bounds, to)
+	if !okA || !okB {
+		return
+	}
+	// a = a·(1−t) + b·t, premultiplied, in place.
+	k := uint32(t*256 + 0.5)
+	pa, pb := a.Pix, b.Pix
+	for i := range pa {
+		pa[i] = byte((uint32(pa[i])*(256-k) + uint32(pb[i])*k) >> 8)
+	}
+	c.composite(a, at, 1-c.cur.fade)
+}
+
+// layer renders draw into a transparent device-resolution image over
+// bounds (user space), clipped to the current clip; at is its device
+// position.
+func (c *Context) layer(bounds Rect, draw func(*Context)) (*Image, Point, bool) {
+	dev := c.cur.xform.TransformRect(bounds).Intersect(c.DeviceClipBounds())
+	if dev.Empty() {
+		return nil, Point{}, false
+	}
+	x0, y0 := float32(math.Floor(float64(dev.Min.X))), float32(math.Floor(float64(dev.Min.Y)))
+	x1, y1 := float32(math.Ceil(float64(dev.Max.X))), float32(math.Ceil(float64(dev.Max.Y)))
+	w, h := int(x1-x0), int(y1-y0)
+	if w < 1 || h < 1 || w > maxLayerDim || h > maxLayerDim {
+		return nil, Point{}, false
+	}
+	img := NewImage(w, h)
+	if draw != nil {
+		lc := NewContext(img)
+		lc.SetMatrix(Translation(-x0, -y0).Mul(c.cur.xform))
+		draw(lc)
+	}
+	return img, Pt(x0, y0), true
+}
+
+// composite draws a layer image at device position at with opacity a.
+func (c *Context) composite(img *Image, at Point, a float32) {
+	if a <= 0 {
+		return
+	}
+	c.Save()
+	c.cur.xform = Identity()
+	c.cur.fade = 0
+	p := Paint{}
+	if a < 1 {
+		p.Opacity = a
+	}
+	c.DrawImageRectPaint(img, XYWH(0, 0, float32(img.Width), float32(img.Height)), XYWH(at.X, at.Y, float32(img.Width), float32(img.Height)), p)
+	c.Restore()
+}
+
+// faded folds the global alpha into paint; false when it paints nothing.
+func (c *Context) faded(p Paint) (Paint, bool) {
+	if c.cur.fade <= 0 {
+		return p, true
+	}
+	a := p.LayerAlpha() * (1 - c.cur.fade)
+	if a <= 0 {
+		return p, false
+	}
+	p.Opacity = a
+	return p, true
+}
+
 // DrawPath fills and/or strokes path according to paint.Style.
 func (c *Context) DrawPath(path *Path, paint Paint) {
 	if path == nil || path.Empty() {
+		return
+	}
+	paint, ok := c.faded(paint)
+	if !ok {
 		return
 	}
 	b := path.Bounds()
@@ -766,6 +897,14 @@ func (c *Context) DrawRoundRect(r Rect, rx, ry float32, paint Paint) {
 	c.DrawPath(p, paint)
 }
 
+// DrawRoundRectCorners draws r with a radius per corner (top-left,
+// top-right, bottom-right, bottom-left) without allocating a path.
+func (c *Context) DrawRoundRectCorners(r Rect, tl, tr, br, bl float32, paint Paint) {
+	p := c.pathScratch()
+	p.AddRoundRectCorners(r, tl, tr, br, bl)
+	c.DrawPath(p, paint)
+}
+
 // DrawOval draws an ellipse inscribed in r.
 func (c *Context) DrawOval(r Rect, paint Paint) {
 	p := c.pathScratch()
@@ -816,7 +955,11 @@ func (c *Context) DrawImageRect(img *Image, src, dst Rect) {
 	if img == nil {
 		return
 	}
-	c.dev.Blit(img, src, dst, c.cur.xform, Paint{Color: White}, c.clip())
+	paint, ok := c.faded(Paint{Color: White})
+	if !ok {
+		return
+	}
+	c.dev.Blit(img, src, dst, c.cur.xform, paint, c.clip())
 	c.markDirtyUser(dst)
 }
 
@@ -825,6 +968,10 @@ func (c *Context) DrawImageRect(img *Image, src, dst Rect) {
 // A white atlas or icon sheet can be themed by setting Color to the UI accent.
 func (c *Context) DrawImageRectPaint(img *Image, src, dst Rect, paint Paint) {
 	if img == nil {
+		return
+	}
+	paint, ok := c.faded(paint)
+	if !ok {
 		return
 	}
 	c.dev.Blit(img, src, dst, c.cur.xform, paint, c.clip())
