@@ -95,3 +95,48 @@ func TestSetAlphaRecords(t *testing.T) {
 		t.Fatalf("replayed fade: green %d, want about 128", g)
 	}
 }
+
+// DrawLayer fades a many-layered drawing as one: a dark frame under a white
+// fill at half opacity is half white over the background, not the darker
+// mix two separately faded shapes give.
+func TestDrawLayerIsGroupOpacity(t *testing.T) {
+	face := func(ctx *Context) {
+		ctx.DrawRect(XYWH(0, 0, 20, 20), Fill(Black))
+		ctx.DrawRect(XYWH(2, 2, 16, 16), Fill(White))
+	}
+	img := NewImage(20, 20)
+	ctx := NewContext(img)
+	ctx.Clear(RGBA(1, 0, 0, 1))
+	ctx.DrawLayer(XYWH(0, 0, 20, 20), 0.5, face)
+	r, g, _, _ := img.PremulAt(10, 10)
+	if !near(r, 255) || !near(g, 128) {
+		t.Fatalf("group opacity: rgb(%d,%d) at the centre, want white at half over red (255,128)", r, g)
+	}
+	// SetAlpha alone darkens the centre: the black shows through.
+	ctx.Clear(RGBA(1, 0, 0, 1))
+	ctx.SetAlpha(0.5)
+	face(ctx)
+	ctx.SetAlpha(1)
+	if r2, _, _, _ := img.PremulAt(10, 10); r2 >= r {
+		t.Fatalf("per-draw alpha should be darker than the layer (red %d vs %d)", r2, r)
+	}
+	// The frame edge: black at half over red.
+	ctx.Clear(RGBA(1, 0, 0, 1))
+	ctx.Translate(3, 0) // the layer follows the transform
+	ctx.DrawLayer(XYWH(0, 0, 20, 20), 0.5, face)
+	if r, g, _, _ := img.PremulAt(4, 10); !near(r, 128) || g > 8 {
+		t.Fatalf("layer frame at x=4: rgb(%d,%d), want half black over red", r, g)
+	}
+	// Alpha 0 draws nothing; alpha 1 draws straight through.
+	img2 := NewImage(20, 20)
+	c2 := NewContext(img2)
+	c2.Clear(White)
+	c2.DrawLayer(XYWH(0, 0, 20, 20), 0, face)
+	if r, _, _, _ := img2.PremulAt(0, 0); r != 255 {
+		t.Fatal("alpha 0 painted")
+	}
+	c2.DrawLayer(XYWH(0, 0, 20, 20), 1, face)
+	if r, _, _, _ := img2.PremulAt(0, 0); r != 0 {
+		t.Fatal("alpha 1 should paint the face as is")
+	}
+}
