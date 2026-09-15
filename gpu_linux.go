@@ -57,6 +57,11 @@ static const char *pe_fs =
 	"uniform int u_cov;\n"
 	"uniform vec2 u_patOrigin;\n"
 	"uniform vec2 u_patSize;\n"
+	"uniform int u_texA8;\n"
+	"vec4 texel(vec2 uv) {\n"
+	"  vec4 t = texture2D(u_tex, uv);\n"
+	"  return u_texA8 == 1 ? vec4(t.a) : t;\n"
+	"}\n"
 	"float tileT(float t) {\n"
 	"  if (u_tile == 1) {\n"
 	"    t = t - floor(t);\n"
@@ -93,9 +98,9 @@ static const char *pe_fs =
 	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5)) * u_tint.a;\n"
 	"  } else if (u_mode == 4) {\n"
 	"    vec2 t = mod(toUser(v_pos) - u_patOrigin, u_patSize) / u_patSize;\n"
-	"    c = texture2D(u_tex, t) * u_tint.a;\n"
+	"    c = texel(t) * u_tint.a;\n"
 	"  } else if (u_mode == 3) {\n"
-	"    c = texture2D(u_tex, v_uv);\n"
+	"    c = texel(v_uv);\n"
 	"    c.rgb *= u_tint.rgb;\n"
 	"    c *= u_tint.a;\n"
 	"  }\n"
@@ -301,6 +306,9 @@ type GPUDevice struct {
 	locRad, locInner, locTile, locInv C.GLint
 	locTint, locCov                   C.GLint
 	locPatO, locPatS                  C.GLint
+	// locTexA8 is u_texA8: the bound image is a FormatA8 mask, uploaded as
+	// GL_ALPHA and read as premultiplied white.
+	locTexA8 C.GLint
 
 	window             bool
 	ownEGL             bool
@@ -373,8 +381,10 @@ type gpuTex struct {
 	id     C.GLuint
 	w, h   int
 	nbytes int
-	epoch  uint64
-	used   uint64
+	// bytes is the texture's size on the GPU (4 or 1 byte per pixel).
+	bytes int
+	epoch uint64
+	used  uint64
 }
 
 // eglDisplayRef refcounts one native EGL display. eglTerminate tears down
@@ -772,6 +782,7 @@ func (d *GPUDevice) bindLocs() {
 	d.locCov = loc(p, "u_cov")
 	d.locPatO = loc(p, "u_patOrigin")
 	d.locPatS = loc(p, "u_patSize")
+	d.locTexA8 = loc(p, "u_texA8")
 }
 
 func (d *GPUDevice) allocTarget() error {
@@ -1193,6 +1204,9 @@ func (d *GPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 		return
 	}
 	d.bindProgram(3, paint, xform, clip)
+	if src.Format == FormatA8 {
+		C.glUniform1i(d.locTexA8, 1)
+	}
 	C.glUniform4f(d.locTint, C.GLfloat(tr)/255, C.GLfloat(tg)/255, C.GLfloat(tb)/255, C.GLfloat(ta)/255)
 	C.glActiveTexture(C.GL_TEXTURE0)
 	C.glBindTexture(C.GL_TEXTURE_2D, tex)
@@ -1330,6 +1344,7 @@ func (d *GPUDevice) Scroll(dx, dy int, r Rect) {
 	C.glUniform1i(d.locMode, 3)
 	C.glUniform1i(d.locUseM, 0)
 	C.glUniform1i(d.locCov, 0)
+	C.glUniform1i(d.locTexA8, 0)
 	C.glUniform4f(d.locTint, 1, 1, 1, 1)
 	C.glActiveTexture(C.GL_TEXTURE0)
 	C.glBindTexture(C.GL_TEXTURE_2D, d.scrollTex)
@@ -1495,6 +1510,7 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 	C.glUniform1i(d.locMode, 3)
 	C.glUniform1i(d.locUseM, 0)
 	C.glUniform1i(d.locCov, 0)
+	C.glUniform1i(d.locTexA8, 0)
 	C.glUniform4f(d.locTint, 1, 1, 1, 1)
 	C.glActiveTexture(C.GL_TEXTURE0)
 	C.glBindTexture(C.GL_TEXTURE_2D, d.color)
@@ -1803,6 +1819,7 @@ func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) 
 	C.glUniform2f(d.locVP, C.GLfloat(d.w), C.GLfloat(d.h))
 	C.glUniform1i(d.locMode, C.GLint(mode))
 	C.glUniform1i(d.locCov, 0)
+	C.glUniform1i(d.locTexA8, 0)
 	r, g, b, a := paint.effectiveColor().Premul8()
 	C.glUniform4f(d.locColor, C.GLfloat(r)/255, C.GLfloat(g)/255, C.GLfloat(b)/255, C.GLfloat(a)/255)
 	inv, ok := xform.Invert()
@@ -1836,6 +1853,9 @@ func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) 
 		// repeats under GLES2; nearest keeps dithers crisp.
 		if g.Image != nil && g.Image.Width > 0 && g.Image.Height > 0 {
 			tex := d.uploadImage(g.Image, FilterNearest)
+			if g.Image.Format == FormatA8 {
+				C.glUniform1i(d.locTexA8, 1)
+			}
 			s := g.scale()
 			C.glUniform2f(d.locPatO, C.GLfloat(g.Origin.X), C.GLfloat(g.Origin.Y))
 			C.glUniform2f(d.locPatS, C.GLfloat(float32(g.Image.Width)*s), C.GLfloat(float32(g.Image.Height)*s))
@@ -1996,10 +2016,11 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_WRAP_S, C.GL_CLAMP_TO_EDGE)
 	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_WRAP_T, C.GL_CLAMP_TO_EDGE)
 	// Packed upload: copy if stride is padded.
+	bpp := src.BytesPerPixel()
 	pix := src.Pix
-	if src.RowStride() != src.Width*4 {
-		pack := make([]byte, src.Width*src.Height*4)
-		row := src.Width * 4
+	if src.RowStride() != src.Width*bpp {
+		row := src.Width * bpp
+		pack := make([]byte, row*src.Height)
 		for y := 0; y < src.Height; y++ {
 			copy(pack[y*row:(y+1)*row], src.Pix[y*src.RowStride():y*src.RowStride()+row])
 		}
@@ -2009,12 +2030,17 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 		C.glDeleteTextures(1, &id)
 		return 0
 	}
-	C.glTexImage2D(C.GL_TEXTURE_2D, 0, C.GL_RGBA, C.GLsizei(src.Width), C.GLsizei(src.Height), 0, C.GL_RGBA, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&pix[0]))
+	format := C.GLenum(C.GL_RGBA)
+	if src.Format == FormatA8 {
+		format = C.GL_ALPHA
+	}
+	C.glTexImage2D(C.GL_TEXTURE_2D, 0, C.GLint(format), C.GLsizei(src.Width), C.GLsizei(src.Height), 0, format, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&pix[0]))
+	bytes := src.Width * src.Height * bpp
 	d.texCache[key] = &gpuTex{
 		id: id, w: src.Width, h: src.Height,
-		nbytes: len(src.Pix), epoch: src.Epoch, used: d.texClock,
+		nbytes: len(src.Pix), bytes: bytes, epoch: src.Epoch, used: d.texClock,
 	}
-	d.texBytes += src.Width * src.Height * 4
+	d.texBytes += bytes
 	d.evictTextures()
 	return id
 }
@@ -2027,7 +2053,7 @@ func (d *GPUDevice) dropTex(key uint64) {
 	}
 	id := e.id
 	C.glDeleteTextures(1, &id)
-	d.texBytes -= e.w * e.h * 4
+	d.texBytes -= e.bytes
 	if d.texBytes < 0 {
 		d.texBytes = 0
 	}
@@ -2106,17 +2132,22 @@ func (d *GPUDevice) uploadDirty(src *Image, id C.GLuint) bool {
 	if x0 >= x1 || y0 >= y1 {
 		return true
 	}
+	bpp := src.BytesPerPixel()
 	// Full re-upload when the dirty box is most of the atlas.
-	if (x1-x0)*(y1-y0)*4 > len(src.Pix)*3/4 {
+	if (x1-x0)*(y1-y0)*bpp > len(src.Pix)*3/4 {
 		return false
+	}
+	format := C.GLenum(C.GL_RGBA)
+	if src.Format == FormatA8 {
+		format = C.GL_ALPHA
 	}
 	C.glBindTexture(C.GL_TEXTURE_2D, id)
 	stride := src.RowStride()
 	w := x1 - x0
 	// GLES2 has no UNPACK_ROW_LENGTH — one row at a time.
 	for y := y0; y < y1; y++ {
-		i := y*stride + x0*4
-		C.glTexSubImage2D(C.GL_TEXTURE_2D, 0, C.GLint(x0), C.GLint(y), C.GLsizei(w), 1, C.GL_RGBA, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&src.Pix[i]))
+		i := y*stride + x0*bpp
+		C.glTexSubImage2D(C.GL_TEXTURE_2D, 0, C.GLint(x0), C.GLint(y), C.GLsizei(w), 1, format, C.GL_UNSIGNED_BYTE, unsafe.Pointer(&src.Pix[i]))
 	}
 	return true
 }

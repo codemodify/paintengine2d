@@ -22,12 +22,20 @@ import (
 //
 // Image implements [image.Image] using straight-alpha [color.NRGBA] so
 // standard encoders (PNG) see conventional colors.
+//
+// An image may instead be a [FormatA8] coverage mask, one byte per pixel,
+// made by [NewImageA8]: a pixel of coverage a reads as premultiplied white
+// (a, a, a, a) wherever the image is sampled or read, so a glyph or icon
+// mask tinted by [Paint.Color] draws as its white RGBA twin would, in a
+// quarter of the memory.
 type Image struct {
 	Width  int
 	Height int
-	// Stride is bytes per row. Zero means packed (Width * 4).
+	// Stride is bytes per row. Zero means packed (Width × bytes per pixel).
 	Stride int
 	Pix    []byte
+	// Format is how Pix stores a pixel; the zero value is [FormatRGBA8].
+	Format PixelFormat
 	// Epoch increments when pixels change ([Image.Clear], [Image.SetColor],
 	// [Image.Bump] / [Image.Touch] / [Image.TouchRect], [Image.Scroll],
 	// [Image.CopyFrom], [Image.ClearRect]). [GPUDevice] keys its texture
@@ -42,6 +50,25 @@ type Image struct {
 	// built as struct literals get one on the first [Image.UID] call.
 	// Copying an Image value copies its ID — use [Image.Clone].
 	ID uint64
+}
+
+// PixelFormat is how an [Image] stores its pixels.
+type PixelFormat uint8
+
+const (
+	// FormatRGBA8 is premultiplied 8-bit RGBA, 4 bytes per pixel.
+	FormatRGBA8 PixelFormat = iota
+	// FormatA8 is 8-bit coverage, 1 byte per pixel, read as premultiplied
+	// white: a glyph or icon mask that is tinted when drawn.
+	FormatA8
+)
+
+// BytesPerPixel is 4 for [FormatRGBA8] and 1 for [FormatA8].
+func (im *Image) BytesPerPixel() int {
+	if im != nil && im.Format == FormatA8 {
+		return 1
+	}
+	return 4
 }
 
 // imageIDs hands out [Image.ID] values. Zero is reserved for "unassigned".
@@ -82,6 +109,34 @@ func NewImage(w, h int) *Image {
 	}
 }
 
+// NewImageA8 allocates a transparent packed w×h coverage mask
+// ([FormatA8], stride = width): glyph sheets and icon masks, which are
+// tinted when drawn, in a quarter of an RGBA image's memory.
+func NewImageA8(w, h int) *Image {
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+	return &Image{
+		Width:  w,
+		Height: h,
+		Stride: w,
+		Pix:    make([]byte, w*h),
+		Format: FormatA8,
+		ID:     nextImageID(),
+	}
+}
+
+// newImageLike allocates a transparent packed w×h image in im's format.
+func (im *Image) newImageLike(w, h int) *Image {
+	if im != nil && im.Format == FormatA8 {
+		return NewImageA8(w, h)
+	}
+	return NewImage(w, h)
+}
+
 // WrapImage attaches an existing premul RGBA buffer. The caller owns pix;
 // it must remain valid and unchanged in length for the Image's lifetime.
 //
@@ -115,7 +170,7 @@ func (im *Image) RowStride() int {
 	if im.Stride > 0 {
 		return im.Stride
 	}
-	return im.Width * 4
+	return im.Width * im.BytesPerPixel()
 }
 
 // NewImageFromNRGBA copies an [image.NRGBA] (or converts any image.Image)
@@ -139,7 +194,7 @@ func NewImageFromNRGBA(src image.Image) *Image {
 	return im
 }
 
-func (im *Image) pixIndex(x, y int) int { return y*im.RowStride() + x*4 }
+func (im *Image) pixIndex(x, y int) int { return y*im.RowStride() + x*im.BytesPerPixel() }
 
 // ColorModel implements [image.Image].
 func (im *Image) ColorModel() color.Model { return color.NRGBAModel }
@@ -160,30 +215,39 @@ func (im *Image) NRGBAAt(x, y int) color.NRGBA {
 	if im == nil || x < 0 || y < 0 || x >= im.Width || y >= im.Height {
 		return color.NRGBA{}
 	}
-	i := im.pixIndex(x, y)
-	return FromPremul8(im.Pix[i+0], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3]).NRGBA()
+	return FromPremul8(im.PremulAt(x, y)).NRGBA()
 }
 
-// PremulAt returns the raw premultiplied 8-bit pixel.
+// PremulAt returns the raw premultiplied 8-bit pixel ([FormatA8]: white
+// at the pixel's coverage).
 func (im *Image) PremulAt(x, y int) (r, g, b, a uint8) {
 	if im == nil || x < 0 || y < 0 || x >= im.Width || y >= im.Height {
 		return
 	}
 	i := im.pixIndex(x, y)
+	if im.Format == FormatA8 {
+		a = im.Pix[i]
+		return a, a, a, a
+	}
 	return im.Pix[i+0], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3]
 }
 
-// SetColor writes a straight-alpha color (converted to premul).
+// SetColor writes a straight-alpha color (converted to premul; a
+// [FormatA8] mask keeps its alpha).
 func (im *Image) SetColor(x, y int, c Color) {
 	if im == nil || x < 0 || y < 0 || x >= im.Width || y >= im.Height {
 		return
 	}
 	r, g, b, a := c.Premul8()
 	i := im.pixIndex(x, y)
-	im.Pix[i+0] = r
-	im.Pix[i+1] = g
-	im.Pix[i+2] = b
-	im.Pix[i+3] = a
+	if im.Format == FormatA8 {
+		im.Pix[i] = a
+	} else {
+		im.Pix[i+0] = r
+		im.Pix[i+1] = g
+		im.Pix[i+2] = b
+		im.Pix[i+3] = a
+	}
 	im.TouchRect(XYWH(float32(x), float32(y), 1, 1))
 }
 
@@ -227,10 +291,14 @@ func (im *Image) Clear(c Color) {
 		return
 	}
 	r, g, b, a := c.Premul8()
-	rowBytes := im.Width * 4
+	rowBytes := im.Width * im.BytesPerPixel()
 	stride := im.RowStride()
 	pix := im.Pix
-	fillRGBA(pix, 0, rowBytes, r, g, b, a)
+	if im.Format == FormatA8 {
+		fillBytes(pix[0:rowBytes], a)
+	} else {
+		fillRGBA(pix, 0, rowBytes, r, g, b, a)
+	}
 	row := pix[0:rowBytes]
 	for y := 1; y < im.Height; y++ {
 		copy(pix[y*stride:y*stride+rowBytes], row)
@@ -256,12 +324,17 @@ func (im *Image) ClearRect(r Rect, c Color) {
 	pr, pg, pb, pa := c.Premul8()
 	stride := im.RowStride()
 	pix := im.Pix
-	rowBytes := (x1 - x0) * 4
-	i0 := y0*stride + x0*4
-	fillRGBA(pix, i0, rowBytes, pr, pg, pb, pa)
+	bpp := im.BytesPerPixel()
+	rowBytes := (x1 - x0) * bpp
+	i0 := y0*stride + x0*bpp
+	if im.Format == FormatA8 {
+		fillBytes(pix[i0:i0+rowBytes], pa)
+	} else {
+		fillRGBA(pix, i0, rowBytes, pr, pg, pb, pa)
+	}
 	src := pix[i0 : i0+rowBytes]
 	for y := y0 + 1; y < y1; y++ {
-		copy(pix[y*stride+x0*4:y*stride+x0*4+rowBytes], src)
+		copy(pix[y*stride+x0*bpp:y*stride+x0*bpp+rowBytes], src)
 	}
 	box := XYWH(float32(x0), float32(y0), float32(x1-x0), float32(y1-y0))
 	if im.Dirty.Empty() {
@@ -272,17 +345,17 @@ func (im *Image) ClearRect(r Rect, c Color) {
 	im.Epoch++
 }
 
-// Clone returns a packed deep copy of the pixmap.
+// Clone returns a packed deep copy of the pixmap, in its format.
 func (im *Image) Clone() *Image {
 	if im == nil {
 		return nil
 	}
-	out := NewImage(im.Width, im.Height)
+	out := im.newImageLike(im.Width, im.Height)
 	if im.RowStride() == out.RowStride() {
 		copy(out.Pix, im.Pix)
 		return out
 	}
-	row := im.Width * 4
+	row := im.Width * im.BytesPerPixel()
 	for y := 0; y < im.Height; y++ {
 		copy(out.Pix[y*row:(y+1)*row], im.Pix[y*im.RowStride():y*im.RowStride()+row])
 	}
@@ -341,15 +414,27 @@ func (im *Image) SubImage(x0, y0, x1, y1 int) *Image {
 		y1 = im.Height
 	}
 	if x1 <= x0 || y1 <= y0 {
-		return NewImage(0, 0)
+		return im.newImageLike(0, 0)
 	}
-	out := NewImage(x1-x0, y1-y0)
+	out := im.newImageLike(x1-x0, y1-y0)
+	n := out.Width * out.BytesPerPixel()
 	for y := y0; y < y1; y++ {
 		si := im.pixIndex(x0, y)
 		di := out.pixIndex(0, y-y0)
-		copy(out.Pix[di:di+out.Width*4], im.Pix[si:si+out.Width*4])
+		copy(out.Pix[di:di+n], im.Pix[si:si+n])
 	}
 	return out
+}
+
+// fillBytes sets every byte of b to v, by doubling.
+func fillBytes(b []byte, v byte) {
+	if len(b) == 0 {
+		return
+	}
+	b[0] = v
+	for filled := 1; filled < len(b); filled *= 2 {
+		copy(b[filled:], b[:filled])
+	}
 }
 
 // fillRGBA writes n bytes (multiple of 4) of a solid premul pixel starting
@@ -413,18 +498,19 @@ func (im *Image) Scroll(dx, dy int, r Rect) {
 	srcX0 := dstX0 - dx
 	srcY0 := dstY0 - dy
 	stride := im.RowStride()
-	rowBytes := w * 4
+	bpp := im.BytesPerPixel()
+	rowBytes := w * bpp
 	pix := im.Pix
 	if dy > 0 {
 		for y := h - 1; y >= 0; y-- {
-			si := (srcY0+y)*stride + srcX0*4
-			di := (dstY0+y)*stride + dstX0*4
+			si := (srcY0+y)*stride + srcX0*bpp
+			di := (dstY0+y)*stride + dstX0*bpp
 			copy(pix[di:di+rowBytes], pix[si:si+rowBytes])
 		}
 	} else {
 		for y := 0; y < h; y++ {
-			si := (srcY0+y)*stride + srcX0*4
-			di := (dstY0+y)*stride + dstX0*4
+			si := (srcY0+y)*stride + srcX0*bpp
+			di := (dstY0+y)*stride + dstX0*bpp
 			copy(pix[di:di+rowBytes], pix[si:si+rowBytes])
 		}
 	}
@@ -466,11 +552,29 @@ func (im *Image) CopyFrom(src *Image, srcRect Rect, destX, destY int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	if src.Format != im.Format {
+		// Between formats: a mask copies in as white at its coverage, an
+		// RGBA image copies into a mask as its alpha.
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				r, g, b, a := src.PremulAt(sx0+x, sy0+y)
+				i := im.pixIndex(destX+x, destY+y)
+				if im.Format == FormatA8 {
+					im.Pix[i] = a
+				} else {
+					im.Pix[i+0], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3] = r, g, b, a
+				}
+			}
+		}
+		im.TouchRect(XYWH(float32(destX), float32(destY), float32(w), float32(h)))
+		return
+	}
 	sstride, dstride := src.RowStride(), im.RowStride()
-	rowBytes := w * 4
+	bpp := im.BytesPerPixel()
+	rowBytes := w * bpp
 	for y := 0; y < h; y++ {
-		si := (sy0+y)*sstride + sx0*4
-		di := (destY+y)*dstride + destX*4
+		si := (sy0+y)*sstride + sx0*bpp
+		di := (destY+y)*dstride + destX*bpp
 		copy(im.Pix[di:di+rowBytes], src.Pix[si:si+rowBytes])
 	}
 	im.TouchRect(XYWH(float32(destX), float32(destY), float32(w), float32(h)))
