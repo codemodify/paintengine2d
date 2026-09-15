@@ -1,6 +1,8 @@
 package paintengine2d
 
 import (
+	"slices"
+
 	"github.com/codemodify/paintengine2d/internal/raster"
 )
 
@@ -18,6 +20,8 @@ type CPUDevice struct {
 	verbs    []raster.Verb
 	pts      []raster.Vec2
 	cover    []uint16
+	// rects is scratch for multi-rect fills (pinstripes, texture rows).
+	rects []Rect
 	// outlineStore reuses transformed stroke outlines across draw calls.
 	outlineStore [][]raster.Vec2
 	strokePool   raster.StrokePool
@@ -497,28 +501,56 @@ func (d *CPUDevice) ensureCover(n int) []uint16 {
 }
 
 func (d *CPUDevice) fillAxisAlignedRect(path *Path, xform Matrix, paint Paint, clip Clip) bool {
-	if paint.Shader != nil || !isClosedRectPath(path) || !xform.IsAxisAligned() {
+	if !xform.IsAxisAligned() {
 		return false
 	}
-	r := xform.TransformRect(path.Bounds())
+	// One rect, or several whose pixels never touch (pinstripes, texture
+	// rows): each box's coverage is exact on its own, so they fill
+	// analytically instead of through the supersampled scanline path.
+	rects := d.rects[:0]
+	if isClosedRectPath(path) {
+		rects = append(rects, xform.TransformRect(path.Bounds()))
+	} else {
+		var ok bool
+		if rects, ok = pixelDisjointRects(path, xform, rects); !ok {
+			d.rects = rects
+			return false
+		}
+	}
+	d.rects = rects
+	solid := paint.Shader == nil
+	var sr, sg, sb, sa uint8
+	if solid {
+		sr, sg, sb, sa = paint.effectiveColor().Premul8()
+		if sa == 0 {
+			return true
+		}
+	} else {
+		// Specialize the shader for this transform once, as rasterFill does.
+		paint.Shader = prepareShader(paint.Shader, xform)
+	}
+	for _, r := range rects {
+		d.fillDeviceRect(r, paint, xform, clip, solid, sr, sg, sb, sa)
+	}
+	return true
+}
+
+// fillDeviceRect fills one device-space box with analytic edge coverage.
+func (d *CPUDevice) fillDeviceRect(r Rect, paint Paint, xform Matrix, clip Clip, solid bool, sr, sg, sb, sa uint8) {
 	if r.Empty() {
-		return true
+		return
 	}
 	x0, y0, x1, y1, ok := d.clipBoundsIntersect(clip, r)
 	if !ok {
-		return true
-	}
-	sr, sg, sb, sa := paint.effectiveColor().Premul8()
-	if sa == 0 {
-		return true
+		return
 	}
 	// Opaque, integer-aligned rect with a scissor-only clip: tight fill.
-	if sa == 255 && clip.Mask == nil &&
+	if solid && sa == 255 && clip.Mask == nil &&
 		r.Min.X == float32(int(r.Min.X)) && r.Min.Y == float32(int(r.Min.Y)) &&
 		r.Max.X == float32(int(r.Max.X)) && r.Max.Y == float32(int(r.Max.Y)) {
 		ix0, iy0, ix1, iy1 := clampPixelBounds(r.Intersect(XYWH(float32(x0), float32(y0), float32(x1-x0), float32(y1-y0))), d.img.Width, d.img.Height)
 		if ix0 >= ix1 || iy0 >= iy1 {
-			return true
+			return
 		}
 		pix := d.img.Pix
 		rowBytes := (ix1 - ix0) * 4
@@ -529,14 +561,82 @@ func (d *CPUDevice) fillAxisAlignedRect(path *Path, xform Matrix, paint Paint, c
 		for y := iy0 + 1; y < iy1; y++ {
 			copy(pix[y*stride+ix0*4:y*stride+ix0*4+rowBytes], src)
 		}
-		return true
+		return
 	}
 	cover := d.ensureCover(d.img.Width)
 	for y := y0; y < y1; y++ {
 		raster.RectCoverage(cover, y, r.Min.X, r.Min.Y, r.Max.X, r.Max.Y, x0, x1)
-		d.blendRow(y, x0, x1, cover, clip, true, sr, sg, sb, sa, paint, xform)
+		d.blendRow(y, x0, x1, cover, clip, solid, sr, sg, sb, sa, paint, xform)
 	}
-	return true
+}
+
+// maxFastRects bounds the multi-rect fast path; larger batches are rare and
+// the scanline path handles them.
+const maxFastRects = 4096
+
+// pixelDisjointRects appends the device boxes of path when it is a list of
+// closed axis-aligned rectangles whose pixel footprints never share a
+// pixel. Touching boxes would blend a shared edge pixel twice (a seam the
+// scanline path's union coverage does not have), so they are refused.
+func pixelDisjointRects(path *Path, xform Matrix, out []Rect) ([]Rect, bool) {
+	if path == nil {
+		return out, false
+	}
+	verbs, pts := path.verbs, path.pts
+	vi, pi := 0, 0
+	for vi < len(verbs) {
+		if verbs[vi] != VerbMove {
+			return out, false
+		}
+		n := 1
+		for vi+n < len(verbs) && verbs[vi+n] == VerbLine {
+			n++
+		}
+		if vi+n >= len(verbs) || verbs[vi+n] != VerbClose {
+			return out, false
+		}
+		lines := n - 1
+		if lines != 3 && lines != 4 {
+			return out, false
+		}
+		sub := Path{verbs: verbs[vi : vi+n+1], pts: pts[pi : pi+n]}
+		if !isClosedRectPath(&sub) {
+			return out, false
+		}
+		if len(out) >= maxFastRects {
+			return out, false
+		}
+		out = append(out, xform.TransformRect(sub.Bounds()))
+		vi += n + 1
+		pi += n
+	}
+	if len(out) < 2 || pi != len(pts) {
+		return out, false
+	}
+	// Sort by top edge, then sweep: only boxes whose pixel rows overlap
+	// can share a pixel.
+	slices.SortFunc(out, func(a, b Rect) int {
+		switch {
+		case a.Min.Y < b.Min.Y:
+			return -1
+		case a.Min.Y > b.Min.Y:
+			return 1
+		}
+		return 0
+	})
+	for i := range out {
+		ax0, ay0, ax1, ay1 := out[i].IntBounds()
+		for j := i + 1; j < len(out); j++ {
+			bx0, by0, bx1, by1 := out[j].IntBounds()
+			if by0 >= ay1 {
+				break
+			}
+			if bx0 < ax1 && ax0 < bx1 && by0 < ay1 && ay0 < by1 {
+				return out, false
+			}
+		}
+	}
+	return out, true
 }
 
 // isClosedRectPath reports whether p is exactly one closed, axis-aligned
