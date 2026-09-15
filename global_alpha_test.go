@@ -140,3 +140,30 @@ func TestDrawLayerIsGroupOpacity(t *testing.T) {
 		t.Fatal("alpha 1 should paint the face as is")
 	}
 }
+
+// A cross-fade mixes the two drawings: a box that is there only in from
+// fades out over the background, and two opaque faces never let the
+// background through mid-way.
+func TestDrawCrossFade(t *testing.T) {
+	box := func(col Color) func(*Context) {
+		return func(ctx *Context) { ctx.DrawRect(XYWH(0, 0, 20, 20), Fill(col)) }
+	}
+	nothing := func(*Context) {}
+	img := NewImage(20, 20)
+	ctx := NewContext(img)
+	ctx.Clear(White)
+	ctx.DrawCrossFade(XYWH(0, 0, 20, 20), 0.75, box(Black), nothing)
+	if r, _, _, _ := img.PremulAt(10, 10); !near(r, 191) {
+		t.Fatalf("a quarter of the black box left over white: R=%d, want ~191", r)
+	}
+	ctx.Clear(White)
+	ctx.DrawCrossFade(XYWH(0, 0, 20, 20), 0.5, box(RGBA(1, 0, 0, 1)), box(RGBA(0, 0, 1, 1)))
+	if r, g, b, _ := img.PremulAt(10, 10); !near(r, 128) || !near(b, 128) || g > 8 {
+		t.Fatalf("red to blue half way: rgb(%d,%d,%d), want (128,0,128) with no white", r, g, b)
+	}
+	ctx.Clear(White)
+	ctx.DrawCrossFade(XYWH(0, 0, 20, 20), 1, box(Black), box(RGBA(0, 0, 1, 1)))
+	if r, _, b, _ := img.PremulAt(10, 10); r != 0 || b != 255 {
+		t.Fatal("t = 1 is the target drawing")
+	}
+}
