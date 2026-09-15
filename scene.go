@@ -52,6 +52,11 @@ type GroupNode struct {
 	LayerOrigin Point
 	LayerOpaque bool
 
+	// backdrop marks a subtree that blurs what lies under it
+	// ([Context.BackdropBlur]): damage touching its region must repaint
+	// the whole region, or the blur would read its own old output.
+	backdrop bool
+
 	clipCache groupClipCache
 }
 
@@ -250,6 +255,7 @@ const (
 	opFill
 	opStroke
 	opBlit
+	opBackdrop
 )
 
 type drawOp struct {
@@ -261,6 +267,7 @@ type drawOp struct {
 	src        *Image
 	srcR, dstR Rect
 	color      Color
+	radius     float32 // opBackdrop: the blur's standard deviation, user units
 }
 
 func (*drawOp) sceneNode() {}
@@ -317,6 +324,11 @@ func DrawSceneRects(s *Scene, dev Device, rects []Rect) {
 // After replay, a [GPUDevice] stores the dirty list so [GPUDevice.Present]
 // / [Context.Present] can swap-with-damage without a second copy of the
 // rects.
+//
+// A box that touches a [Context.BackdropBlur] region grows to cover the
+// whole region (the content under a blur is repainted before the blur
+// reads it); dirty then holds the grown boxes, which are what the caller
+// must present.
 func DrawSceneDamage(s *Scene, dev Device, dirty *Damage) {
 	if s == nil || s.Root == nil || dev == nil {
 		return
@@ -338,7 +350,10 @@ func DrawSceneDamage(s *Scene, dev Device, dirty *Damage) {
 		return
 	}
 	// Snapshot: a Device call must not observe a half-mutated list.
-	rects := append([]Rect(nil), dirty.Rects...)
+	rects := widenForBackdrops(s, append([]Rect(nil), dirty.Rects...))
+	if s.Root.backdrop {
+		dirty.Rects = append(dirty.Rects[:0], rects...)
+	}
 	for _, r := range rects {
 		if r.Empty() {
 			continue
@@ -347,7 +362,7 @@ func DrawSceneDamage(s *Scene, dev Device, dirty *Damage) {
 		w.walk(s.Root, Identity())
 		w.flush()
 	}
-	setPresentDamage(dev, dirty.Rects)
+	setPresentDamage(dev, rects)
 }
 
 // emptyPresent is a non-nil empty slice: SetPresentDamage skips the swap.
@@ -433,6 +448,13 @@ func (w *sceneWalker) walk(n Node, acc Matrix) {
 			}
 			w.flush()
 			w.dev.Blit(t.src, t.srcR, t.dstR, acc.Mul(t.xform), t.paint, w.clipOp(t.clip, acc))
+		case opBackdrop:
+			b, ok := w.dev.(BackdropBlurrer)
+			if !ok || w.skipRect(opDeviceBounds(t, acc)) {
+				return
+			}
+			w.flush()
+			b.BackdropBlur(t.dstR, acc.Mul(t.xform), t.radius, w.clipOp(t.clip, acc))
 		}
 	}
 }
@@ -716,11 +738,61 @@ func opContentBounds(op *drawOp, acc Matrix) Rect {
 			return Rect{}
 		}
 		return xf.TransformRect(strokePadBounds(op.path.Bounds(), op.paint.Stroke))
-	case opBlit:
+	case opBlit, opBackdrop:
 		return xf.TransformRect(op.dstR)
 	default:
 		return Rect{}
 	}
+}
+
+// backdropRegions appends the device regions the backdrop ops under g read:
+// each op's rectangle grown by how far its blur reaches.
+func backdropRegions(g *GroupNode, acc Matrix, out []Rect) []Rect {
+	if g == nil || !g.backdrop {
+		return out
+	}
+	xf := acc.Mul(g.Xform)
+	for _, ch := range g.Children {
+		switch t := ch.(type) {
+		case *GroupNode:
+			out = backdropRegions(t, xf, out)
+		case *drawOp:
+			if t != nil && t.kind == opBackdrop {
+				m := xf.Mul(t.xform)
+				reach := float32(blurReach(t.radius * m.ApproxScale()))
+				out = append(out, m.TransformRect(t.dstR).Inset(-reach))
+			}
+		}
+	}
+	return out
+}
+
+// widenForBackdrops grows every dirty box that touches a backdrop region
+// to cover the region, so the content under a blur is repainted before
+// the blur reads it.
+func widenForBackdrops(s *Scene, dirty []Rect) []Rect {
+	if s == nil || s.Root == nil || !s.Root.backdrop {
+		return dirty
+	}
+	regions := backdropRegions(s.Root, Identity(), nil)
+	if len(regions) == 0 {
+		return dirty
+	}
+	var d Damage
+	for _, r := range dirty {
+		for grown := true; grown; {
+			grown = false
+			for _, g := range regions {
+				if r.Overlaps(g) && !g.Empty() {
+					if u := r.Union(g); u != r {
+						r, grown = u, true
+					}
+				}
+			}
+		}
+		d.Add(r)
+	}
+	return d.Rects
 }
 
 // opDeviceBounds is the op's device box padded by one pixel. The padding

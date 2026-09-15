@@ -326,3 +326,57 @@ func TestGPURectCoverageMatchesCPU(t *testing.T) {
 		}
 	}
 }
+
+// The GPU backdrop blur matches the CPU one: grey stripes inside the rect,
+// the stripes untouched outside, and a rounded clip keeps its corners.
+func TestGPUBackdropBlurMatchesCPU(t *testing.T) {
+	const w, h = 96, 64
+	d := gpuDev(t, w, h)
+	defer d.Close()
+	gctx := NewContextDevice(d)
+	cimg := NewImage(w, h)
+	cctx := NewContext(cimg)
+	for _, ctx := range []*Context{gctx, cctx} {
+		stripes(ctx, w, h)
+		ctx.Save()
+		ctx.ClipRoundRect(XYWH(24, 12, 48, 40), 10, 10)
+		ctx.BackdropBlur(XYWH(24, 12, 48, 40), 4)
+		ctx.Restore()
+	}
+	gimg := d.Snapshot()
+	for _, p := range [][2]int{{40, 30}, {48, 32}, {60, 40}} {
+		gr, _, _, _ := gimg.PremulAt(p[0], p[1])
+		cr, _, _, _ := cimg.PremulAt(p[0], p[1])
+		if gr < 90 || gr > 170 {
+			t.Errorf("GPU blur at %v: %d, want grey", p, gr)
+		}
+		if diff := int(gr) - int(cr); diff > 14 || diff < -14 {
+			t.Errorf("GPU %d vs CPU %d at %v", gr, cr, p)
+		}
+	}
+	if r, _, _, _ := gimg.PremulAt(8, 30); r != 0 {
+		t.Errorf("GPU blur leaked outside: %d", r)
+	}
+	if r, _, _, _ := gimg.PremulAt(24, 12); r != 0 {
+		t.Errorf("GPU blur ignored the rounded clip at the corner: %d", r)
+	}
+}
+
+// Replaying a recorded blur on the GPU (the app's path) blurs as well.
+func TestGPUBackdropBlurScene(t *testing.T) {
+	const w, h = 96, 64
+	d := gpuDev(t, w, h)
+	defer d.Close()
+	rec := NewRecorder(w, h)
+	ctx := NewContextDevice(rec)
+	stripes(ctx, w, h)
+	ctx.BackdropBlur(XYWH(24, 12, 48, 40), 4)
+	DrawScene(rec.Finish(), d)
+	img := d.Snapshot()
+	if r, _, _, _ := img.PremulAt(48, 32); r < 90 || r > 170 {
+		t.Fatalf("scene blur on the GPU: %d, want grey", r)
+	}
+	if r, _, _, _ := img.PremulAt(8, 32); r != 0 {
+		t.Fatalf("scene blur leaked: %d", r)
+	}
+}
