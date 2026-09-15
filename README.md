@@ -40,7 +40,7 @@ stability notes below.
 | --- | --- |
 | Language | Go 1.22+ |
 | CGO | none for CPU; optional Linux EGL/GLES for [GPUDevice] |
-| License | MIT |
+| License | [The Free License](LICENSE) |
 | Pixel format | premultiplied 8-bit sRGB RGBA (packed or padded `Stride`) |
 
 ## Motivation
@@ -409,7 +409,7 @@ shipping hardware backend, not a future hook.
 
 | | Language | CGO / native deps | Engine | GPU | UI toolkit | License (typical) | Best for |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **paintengine2d** | Go 1.22+ | **Optional** (EGL/GLES on Linux) | **Own** CPU scanline AA + GPU stencil-and-cover | Yes (Linux EGL) | No | MIT | Shared paint core for a UI kit **and** WM/DE; tools, tests |
+| **paintengine2d** | Go 1.22+ | **Optional** (EGL/GLES on Linux) | **Own** CPU scanline AA + GPU stencil-and-cover | Yes (Linux EGL) | No | The Free License | Shared paint core for a UI kit **and** WM/DE; tools, tests |
 | [Gio](https://gioui.org) | Go | Optional (platform windowing) | Own ops + GPU/CPU renderer | Yes | Yes (widgets, layout, input) | MIT / Unlicense | Full native Go GUIs; not a drop-in paint library |
 | [Fyne](https://fyne.io) | Go | OpenGL / platform via fyne | Own + GL | Yes (via GL) | Yes | BSD-3-Clause | Cross-platform Go apps with batteries-included widgets |
 | Skia bindings | Go/C++ | **Yes** (Skia + toolchain) | Binding | Yes | No (canvas only) | Skia BSD-3 | Production 2D when you want Skia’s completeness and accept CGO |
@@ -585,4 +585,4 @@ Do not call `Clear` (full surface) on a hover invalidation.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The Free License — see [LICENSE](LICENSE).
