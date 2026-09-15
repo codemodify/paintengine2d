@@ -312,6 +312,7 @@ type GPUDevice struct {
 	info               string
 	scrollTex          C.GLuint
 	scrollTW, scrollTH int
+	blur               gpuBlur // backdrop blur program and scratch targets
 
 	pixels    *Image
 	readDirty bool
@@ -876,6 +877,7 @@ func (d *GPUDevice) freeTarget() {
 
 func (d *GPUDevice) destroyGL() {
 	d.freeTarget()
+	d.freeBlur()
 	if d.vbo != 0 {
 		C.glDeleteBuffers(1, &d.vbo)
 		d.vbo = 0

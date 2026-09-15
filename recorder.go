@@ -105,6 +105,11 @@ func (r *Recorder) Attach(g *GroupNode) {
 	}
 	r.add(g)
 	r.reused++
+	if g.backdrop {
+		for _, p := range r.stack {
+			p.backdrop = true
+		}
+	}
 }
 
 // internPath returns an immutable snapshot of path, reusing an equal one
@@ -229,6 +234,21 @@ func (r *Recorder) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint P
 		clip:  cloneClip(clip),
 	}
 	r.add(op)
+}
+
+// BackdropBlur implements [BackdropBlurrer]: the blur is replayed on the
+// target device, and every group up to the root is marked so damage over
+// its region repaints the whole region first.
+func (r *Recorder) BackdropBlur(rect Rect, xform Matrix, radius float32, clip Clip) {
+	if r == nil || rect.Empty() || radius <= 0 || !xform.Finite() {
+		return
+	}
+	op := r.newOp()
+	*op = drawOp{kind: opBackdrop, dstR: rect, xform: xform, radius: radius, clip: cloneClip(clip)}
+	r.add(op)
+	for _, g := range r.stack {
+		g.backdrop = true
+	}
 }
 
 // cloneClip retains the recorded clip. The coverage mask is shared by
