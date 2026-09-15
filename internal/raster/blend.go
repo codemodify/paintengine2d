@@ -26,6 +26,30 @@ func BlendSrcOver(dst []byte, i int, sr, sg, sb, sa, cover uint8) {
 	dst[i+3] = sa + mul255(dst[i+3], inv)
 }
 
+// BlendDestOut erases the destination pixel where the source covers it:
+// dst *= 1 − sa·cover (premultiplied). The source's colour plays no part —
+// it is a shaped eraser, the Porter-Duff dest-out operator.
+func BlendDestOut(dst []byte, i int, sa, cover uint8) {
+	if cover == 0 || sa == 0 {
+		return
+	}
+	if cover != 255 {
+		sa = mul255(sa, cover)
+	}
+	if sa == 255 {
+		dst[i+0] = 0
+		dst[i+1] = 0
+		dst[i+2] = 0
+		dst[i+3] = 0
+		return
+	}
+	inv := uint8(255 - sa)
+	dst[i+0] = mul255(dst[i+0], inv)
+	dst[i+1] = mul255(dst[i+1], inv)
+	dst[i+2] = mul255(dst[i+2], inv)
+	dst[i+3] = mul255(dst[i+3], inv)
+}
+
 func mul255(a, b uint8) uint8 {
 	return uint8((uint16(a)*uint16(b) + 127) / 255)
 }
