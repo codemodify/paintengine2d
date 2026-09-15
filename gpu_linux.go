@@ -55,6 +55,8 @@ static const char *pe_fs =
 	"uniform mat3 u_inv;\n"
 	"uniform vec4 u_tint;\n"
 	"uniform int u_cov;\n"
+	"uniform vec2 u_patOrigin;\n"
+	"uniform vec2 u_patSize;\n"
 	"float tileT(float t) {\n"
 	"  if (u_tile == 1) {\n"
 	"    t = t - floor(t);\n"
@@ -89,6 +91,9 @@ static const char *pe_fs =
 	"    if (span < 1e-8) t = dist <= u_radius ? 0.0 : 1.0;\n"
 	"    else t = (dist - u_inner) / span;\n"
 	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5)) * u_tint.a;\n"
+	"  } else if (u_mode == 4) {\n"
+	"    vec2 t = mod(toUser(v_pos) - u_patOrigin, u_patSize) / u_patSize;\n"
+	"    c = texture2D(u_tex, t) * u_tint.a;\n"
 	"  } else if (u_mode == 3) {\n"
 	"    c = texture2D(u_tex, v_uv);\n"
 	"    c.rgb *= u_tint.rgb;\n"
@@ -295,6 +300,7 @@ type GPUDevice struct {
 	locMaskR, locG0, locG1, locCenter C.GLint
 	locRad, locInner, locTile, locInv C.GLint
 	locTint, locCov                   C.GLint
+	locPatO, locPatS                  C.GLint
 
 	window             bool
 	ownEGL             bool
@@ -761,6 +767,8 @@ func (d *GPUDevice) bindLocs() {
 	d.locInv = loc(p, "u_inv")
 	d.locTint = loc(p, "u_tint")
 	d.locCov = loc(p, "u_cov")
+	d.locPatO = loc(p, "u_patOrigin")
+	d.locPatS = loc(p, "u_patSize")
 }
 
 func (d *GPUDevice) allocTarget() error {
@@ -1780,6 +1788,8 @@ func (d *GPUDevice) shaderMode(paint Paint) int {
 		return 1
 	case RadialGradient:
 		return 2
+	case ImagePattern:
+		return 4
 	default:
 		return 0
 	}
@@ -1818,6 +1828,18 @@ func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) 
 	C.glUniform1i(d.locUseM, C.GLint(useMask))
 
 	switch g := paint.Shader.(type) {
+	case ImagePattern:
+		// The pattern tiles in the shader (mod), so a texture of any size
+		// repeats under GLES2; nearest keeps dithers crisp.
+		if g.Image != nil && g.Image.Width > 0 && g.Image.Height > 0 {
+			tex := d.uploadImage(g.Image, FilterNearest)
+			s := g.scale()
+			C.glUniform2f(d.locPatO, C.GLfloat(g.Origin.X), C.GLfloat(g.Origin.Y))
+			C.glUniform2f(d.locPatS, C.GLfloat(float32(g.Image.Width)*s), C.GLfloat(float32(g.Image.Height)*s))
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, tex)
+			C.glUniform1i(d.locTex, 0)
+		}
 	case LinearGradient:
 		d.bakeStops(g.Stops)
 		C.glUniform2f(d.locG0, C.GLfloat(g.Start.X), C.GLfloat(g.Start.Y))
