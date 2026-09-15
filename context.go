@@ -897,6 +897,14 @@ func (c *Context) DrawRoundRect(r Rect, rx, ry float32, paint Paint) {
 	c.DrawPath(p, paint)
 }
 
+// DrawRoundRectCorners draws r with a radius per corner (top-left,
+// top-right, bottom-right, bottom-left) without allocating a path.
+func (c *Context) DrawRoundRectCorners(r Rect, tl, tr, br, bl float32, paint Paint) {
+	p := c.pathScratch()
+	p.AddRoundRectCorners(r, tl, tr, br, bl)
+	c.DrawPath(p, paint)
+}
+
 // DrawOval draws an ellipse inscribed in r.
 func (c *Context) DrawOval(r Rect, paint Paint) {
 	p := c.pathScratch()
