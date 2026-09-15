@@ -179,6 +179,51 @@ func (p *Path) AddRoundRect(r Rect, rx, ry float32) {
 	p.Close()
 }
 
+// AddRoundRectCorners appends a closed rectangle with its own circular
+// radius at each corner (top-left, top-right, bottom-right, bottom-left): a
+// tab's rounded top, a pill's rounded end. Each radius is clamped to half
+// the shorter side; a zero radius leaves that corner sharp.
+func (p *Path) AddRoundRectCorners(r Rect, tl, tr, br, bl float32) {
+	r = r.Canon()
+	if r.Empty() {
+		return
+	}
+	m := r.Dx() * 0.5
+	if h := r.Dy() * 0.5; h < m {
+		m = h
+	}
+	clampR := func(v float32) float32 {
+		if v > m {
+			return m
+		}
+		if v < 0 {
+			return 0
+		}
+		return v
+	}
+	tl, tr, br, bl = clampR(tl), clampR(tr), clampR(br), clampR(bl)
+	const k = 0.5522847 // cubic circle constant
+	x0, y0, x1, y1 := r.Min.X, r.Min.Y, r.Max.X, r.Max.Y
+	p.MoveTo(x0+tl, y0)
+	p.LineTo(x1-tr, y0)
+	if tr > 0 {
+		p.CubicTo(x1-tr+tr*k, y0, x1, y0+tr-tr*k, x1, y0+tr)
+	}
+	p.LineTo(x1, y1-br)
+	if br > 0 {
+		p.CubicTo(x1, y1-br+br*k, x1-br+br*k, y1, x1-br, y1)
+	}
+	p.LineTo(x0+bl, y1)
+	if bl > 0 {
+		p.CubicTo(x0+bl-bl*k, y1, x0, y1-bl+bl*k, x0, y1-bl)
+	}
+	p.LineTo(x0, y0+tl)
+	if tl > 0 {
+		p.CubicTo(x0, y0+tl-tl*k, x0+tl-tl*k, y0, x0+tl, y0)
+	}
+	p.Close()
+}
+
 // AddEllipse appends a closed ellipse centered at c with radii rx, ry.
 func (p *Path) AddEllipse(c Point, rx, ry float32) {
 	if rx < 0 {
