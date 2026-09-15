@@ -249,7 +249,7 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
 			}
 			i := d.img.pixIndex(x, y)
-			raster.BlendSrcOver(d.img.Pix, i, sr, sg, sb, sa, cover)
+			blendPix(paint.Blend, d.img.Pix, i, sr, sg, sb, sa, cover)
 		}
 	}
 }
@@ -323,7 +323,7 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 			if mod != 255 {
 				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
 			}
-			raster.BlendSrcOver(dpix, di, sr, sg, sb, sa, cover)
+			blendPix(paint.Blend, dpix, di, sr, sg, sb, sa, cover)
 			di += 4
 		}
 	}
@@ -418,9 +418,19 @@ func (d *CPUDevice) rasterFill(paint Paint, xform Matrix, clip Clip, rule int) {
 	}
 }
 
+// blendPix composites one premultiplied source pixel with the paint's
+// operator: src-over, or dest-out, which erases what is there instead.
+func blendPix(mode BlendMode, pix []byte, i int, sr, sg, sb, sa, cover uint8) {
+	if mode == BlendDestOut {
+		raster.BlendDestOut(pix, i, sa, cover)
+		return
+	}
+	raster.BlendSrcOver(pix, i, sr, sg, sb, sa, cover)
+}
+
 func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid bool, sr, sg, sb, sa uint8, paint Paint, xform Matrix) {
 	pix := d.img.Pix
-	if clip.Mask == nil && solid {
+	if clip.Mask == nil && solid && paint.Blend == BlendSrcOver {
 		for x := x0; x < x1; x++ {
 			c := cover[x]
 			if c == 0 {
@@ -453,7 +463,7 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 		}
 		i := d.img.pixIndex(x, y)
 		if solid {
-			raster.BlendSrcOver(pix, i, sr, sg, sb, sa, uint8(c))
+			blendPix(paint.Blend, pix, i, sr, sg, sb, sa, uint8(c))
 			continue
 		}
 		col := paint.Shader.Shade(float32(x)+0.5, float32(y)+0.5, xform)
@@ -464,7 +474,7 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 		if aa == 0 {
 			continue
 		}
-		raster.BlendSrcOver(pix, i, rr, gg, bb, aa, uint8(c))
+		blendPix(paint.Blend, pix, i, rr, gg, bb, aa, uint8(c))
 	}
 }
 
@@ -562,7 +572,7 @@ func (d *CPUDevice) fillDeviceRect(r Rect, paint Paint, xform Matrix, clip Clip,
 		return
 	}
 	// Opaque, integer-aligned rect with a scissor-only clip: tight fill.
-	if solid && sa == 255 && clip.Mask == nil &&
+	if solid && sa == 255 && clip.Mask == nil && paint.Blend == BlendSrcOver &&
 		r.Min.X == float32(int(r.Min.X)) && r.Min.Y == float32(int(r.Min.Y)) &&
 		r.Max.X == float32(int(r.Max.X)) && r.Max.Y == float32(int(r.Max.Y)) {
 		ix0, iy0, ix1, iy1 := clampPixelBounds(r.Intersect(XYWH(float32(x0), float32(y0), float32(x1-x0), float32(y1-y0))), d.img.Width, d.img.Height)
