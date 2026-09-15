@@ -135,6 +135,10 @@ func (c *Context) DrawGlyphs(run GlyphRun, origin Point, paint Paint) {
 	if paint.Color == (Color{}) {
 		paint.Color = White
 	}
+	paint, ok := c.faded(paint)
+	if !ok {
+		return
+	}
 	clip := c.clip()
 	var dirty Rect
 	for _, g := range run.Glyphs {

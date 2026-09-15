@@ -273,6 +273,27 @@ func TestGPUHonoursOpacity(t *testing.T) {
 	if r, _, _, _ := d.Snapshot().PremulAt(4, 4); r < 200 {
 		t.Fatalf("alpha-0 tint must paint nothing on the GPU, got R=%d", r)
 	}
+
+	// Gradients take the layer alpha too, as on the CPU: a fading
+	// gradient (Context.SetAlpha) must not paint opaque.
+	grad := LinearGradient{Start: Pt(0, 0), End: Pt(32, 0), Stops: []GradientStop{{0, Black}, {1, Black}}}
+	for name, path := range map[string]*Path{
+		"rect": RectPath(XYWH(0, 0, 32, 32)),
+		"triangle": func() *Path {
+			p := NewPath()
+			p.MoveTo(0, 0)
+			p.LineTo(64, 0)
+			p.LineTo(0, 64)
+			p.Close()
+			return p
+		}(),
+	} {
+		d.Clear(White)
+		d.Fill(path, Identity(), Paint{Shader: grad, Opacity: 0.5}, Clip{})
+		if r, _, _, _ := d.Snapshot().PremulAt(8, 8); r < 100 || r > 160 {
+			t.Fatalf("half-opacity GPU gradient %s R=%d", name, r)
+		}
+	}
 }
 
 // Fractional and sub-pixel rectangles must carry analytic coverage on the
