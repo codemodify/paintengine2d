@@ -57,6 +57,9 @@ type ctxState struct {
 	clip   deviceClip
 	fill   Paint
 	stroke Paint
+	// fade is 1 − the global alpha ([Context.SetAlpha]), so the zero state
+	// paints opaque.
+	fade float32
 }
 
 // NewContext draws into img using the CPU backend.
@@ -710,9 +713,35 @@ func (c *Context) markDirtyDevice() {
 	c.damage.Add(XYWH(0, 0, float32(w), float32(h)))
 }
 
+// SetAlpha multiplies the opacity of every later draw by a (Canvas 2D's
+// globalAlpha): chrome that fades in and out, such as a transient scroll
+// bar or a toast, needs no offscreen layer. Draws that overlap still blend
+// with each other, unlike a group layer. Save and Restore keep it.
+func (c *Context) SetAlpha(a float32) { c.cur.fade = 1 - clamp32(a, 0, 1) }
+
+// Alpha is the global alpha [Context.SetAlpha] set (1 by default).
+func (c *Context) Alpha() float32 { return 1 - c.cur.fade }
+
+// faded folds the global alpha into paint; false when it paints nothing.
+func (c *Context) faded(p Paint) (Paint, bool) {
+	if c.cur.fade <= 0 {
+		return p, true
+	}
+	a := p.LayerAlpha() * (1 - c.cur.fade)
+	if a <= 0 {
+		return p, false
+	}
+	p.Opacity = a
+	return p, true
+}
+
 // DrawPath fills and/or strokes path according to paint.Style.
 func (c *Context) DrawPath(path *Path, paint Paint) {
 	if path == nil || path.Empty() {
+		return
+	}
+	paint, ok := c.faded(paint)
+	if !ok {
 		return
 	}
 	b := path.Bounds()
@@ -816,7 +845,11 @@ func (c *Context) DrawImageRect(img *Image, src, dst Rect) {
 	if img == nil {
 		return
 	}
-	c.dev.Blit(img, src, dst, c.cur.xform, Paint{Color: White}, c.clip())
+	paint, ok := c.faded(Paint{Color: White})
+	if !ok {
+		return
+	}
+	c.dev.Blit(img, src, dst, c.cur.xform, paint, c.clip())
 	c.markDirtyUser(dst)
 }
 
@@ -825,6 +858,10 @@ func (c *Context) DrawImageRect(img *Image, src, dst Rect) {
 // A white atlas or icon sheet can be themed by setting Color to the UI accent.
 func (c *Context) DrawImageRectPaint(img *Image, src, dst Rect, paint Paint) {
 	if img == nil {
+		return
+	}
+	paint, ok := c.faded(paint)
+	if !ok {
 		return
 	}
 	c.dev.Blit(img, src, dst, c.cur.xform, paint, c.clip())

@@ -80,7 +80,7 @@ static const char *pe_fs =
 	"    float len2 = dot(d, d);\n"
 	"    float t = 0.0;\n"
 	"    if (len2 > 1e-12) t = dot(p - u_g0, d) / len2;\n"
-	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5));\n"
+	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5)) * u_tint.a;\n"
 	"  } else if (u_mode == 2) {\n"
 	"    vec2 p = toUser(v_pos);\n"
 	"    float dist = length(p - u_center);\n"
@@ -88,7 +88,7 @@ static const char *pe_fs =
 	"    float t = 0.0;\n"
 	"    if (span < 1e-8) t = dist <= u_radius ? 0.0 : 1.0;\n"
 	"    else t = (dist - u_inner) / span;\n"
-	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5));\n"
+	"    c = texture2D(u_ramp, vec2(tileT(t), 0.5)) * u_tint.a;\n"
 	"  } else if (u_mode == 3) {\n"
 	"    c = texture2D(u_tex, v_uv);\n"
 	"    c.rgb *= u_tint.rgb;\n"
@@ -1800,7 +1800,9 @@ func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) 
 		C.GLfloat(inv.E), C.GLfloat(inv.F), 1,
 	}
 	C.glUniformMatrix3fv(d.locInv, 1, C.GL_FALSE, &m[0])
-	C.glUniform4f(d.locTint, 1, 1, 1, 1)
+	// Gradients take the paint's layer alpha through the tint (solid colours
+	// fold it into u_color; a blit sets its own tint after this).
+	C.glUniform4f(d.locTint, 1, 1, 1, C.GLfloat(paint.LayerAlpha()))
 
 	useMask := 0
 	if clip.Mask != nil && clip.MaskW > 0 && clip.MaskH > 0 {
