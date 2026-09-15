@@ -101,6 +101,68 @@ func SampleNearestPremul(pix []byte, w, h, stride int, x, y float32) (r, g, b, a
 	return pixelAt(pix, w, h, stride, mathFloor32(x), mathFloor32(y))
 }
 
+// SampleBilinearA8 is [SampleBilinearPremul] for a one-byte coverage mask
+// (stride 0 or < w means packed). For a white mask it returns the alpha
+// the RGBA sampler would.
+func SampleBilinearA8(pix []byte, w, h, stride int, x, y float32) uint8 {
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	if stride < w {
+		stride = w
+	}
+	x0 := int(mathFloor32(x))
+	y0 := int(mathFloor32(y))
+	fx := x - float32(x0)
+	fy := y - float32(y0)
+	if fx < 0 {
+		fx += 1
+		x0--
+	}
+	if fy < 0 {
+		fy += 1
+		y0--
+	}
+	var sa float32
+	for oy := 0; oy < 2; oy++ {
+		wy := (1 - fy)
+		if oy == 1 {
+			wy = fy
+		}
+		yy := y0 + oy
+		for ox := 0; ox < 2; ox++ {
+			wx := (1 - fx)
+			if ox == 1 {
+				wx = fx
+			}
+			wt := wx * wy
+			if wt == 0 {
+				continue
+			}
+			sa += float32(coverAt(pix, w, h, stride, x0+ox, yy)) * wt
+		}
+	}
+	return uint8(sa + 0.5)
+}
+
+// SampleNearestA8 is [SampleNearestPremul] for a one-byte coverage mask.
+func SampleNearestA8(pix []byte, w, h, stride int, x, y float32) uint8 {
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	if stride < w {
+		stride = w
+	}
+	return coverAt(pix, w, h, stride, mathFloor32(x), mathFloor32(y))
+}
+
+func coverAt(pix []byte, w, h, stride, x, y int) uint8 {
+	if x < 0 || y < 0 || x >= w || y >= h {
+		return 0
+	}
+	return pix[y*stride+x]
+}
+
 func pixelAt(pix []byte, w, h, stride, x, y int) (r, g, b, a uint8) {
 	if x < 0 || y < 0 || x >= w || y >= h {
 		return

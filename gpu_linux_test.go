@@ -215,3 +215,35 @@ func TestGPUAtlasTouchRectKeepsTex(t *testing.T) {
 		t.Fatal("TouchRect should sub-upload, not allocate a new texture")
 	}
 }
+
+// A mask draws on the GPU as its white RGBA twin does (uploaded as
+// GL_ALPHA, read as white), and takes a quarter of the texture memory.
+func TestGPUBlitA8MatchesWhiteRGBA(t *testing.T) {
+	if !GPUAvailable() {
+		t.Skip("no EGL/GLES")
+	}
+	mask, twin := a8Twins()
+	for _, d := range a8Draws {
+		var shots [2]*Image
+		for k, src := range []*Image{mask, twin} {
+			dev, err := NewGPUDevice(48, 40)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dev.Clear(RGB(0.8, 0.8, 0.7))
+			dev.Blit(src, XYWH(0, 0, 13, 9), d.dst, d.xf, d.paint, Clip{})
+			if k == 0 {
+				if e := dev.texCache[src.UID()]; e == nil || e.bytes != 13*9 {
+					t.Fatalf("%s: the mask's texture should take one byte a pixel", d.name)
+				}
+			}
+			shots[k] = dev.Snapshot().Clone()
+			dev.Close()
+		}
+		for i := range shots[0].Pix {
+			if diff := int(shots[0].Pix[i]) - int(shots[1].Pix[i]); diff > 1 || diff < -1 {
+				t.Fatalf("%s: byte %d is %d from the mask, %d from its twin", d.name, i, shots[0].Pix[i], shots[1].Pix[i])
+			}
+		}
+	}
+}

@@ -226,9 +226,18 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 				continue
 			}
 			var sr, sg, sb, sa uint8
-			if paint.Filter == FilterNearest {
+			switch {
+			case src.Format == FormatA8:
+				// A coverage mask samples as premultiplied white.
+				if paint.Filter == FilterNearest {
+					sa = raster.SampleNearestA8(src.Pix, src.Width, src.Height, src.RowStride(), tx, ty)
+				} else {
+					sa = raster.SampleBilinearA8(src.Pix, src.Width, src.Height, src.RowStride(), tx-0.5, ty-0.5)
+				}
+				sr, sg, sb = sa, sa, sa
+			case paint.Filter == FilterNearest:
 				sr, sg, sb, sa = raster.SampleNearestPremul(src.Pix, src.Width, src.Height, src.RowStride(), tx, ty)
-			} else {
+			default:
 				sr, sg, sb, sa = raster.SampleBilinearPremul(src.Pix, src.Width, src.Height, src.RowStride(), tx-0.5, ty-0.5)
 			}
 			if sa == 0 {
@@ -274,6 +283,8 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 	spix := src.Pix
 	dpix := d.img.Pix
 	useMask := clip.Mask != nil
+	bpp := src.BytesPerPixel()
+	a8 := src.Format == FormatA8
 	for y := y0; y < y1; y++ {
 		sy := sy0 + (y - dy0)
 		if sy < sy0 || sy >= syMax {
@@ -295,8 +306,14 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 				di += 4
 				continue
 			}
-			si := srow + sx*4
-			sr, sg, sb, sa := spix[si+0], spix[si+1], spix[si+2], spix[si+3]
+			si := srow + sx*bpp
+			var sr, sg, sb, sa uint8
+			if a8 {
+				sa = spix[si]
+				sr, sg, sb = sa, sa, sa
+			} else {
+				sr, sg, sb, sa = spix[si+0], spix[si+1], spix[si+2], spix[si+3]
+			}
 			if sa == 0 {
 				di += 4
 				continue
