@@ -69,13 +69,20 @@ const (
 	FilterNearest
 )
 
-// BlendMode is the Porter-Duff operator. v0.2 implements [BlendSrcOver] only;
-// any other value is treated as src-over. Extra modes are planned, not faked.
+// BlendMode is the Porter-Duff operator. [BlendSrcOver] and [BlendDestOut]
+// are implemented; any other value is treated as src-over. Extra modes are
+// planned, not faked.
 type BlendMode uint8
 
 const (
 	// BlendSrcOver is the standard “source over destination” operator.
 	BlendSrcOver BlendMode = iota
+	// BlendDestOut keeps the destination only where the source is
+	// transparent: dst *= 1 − src.A (the source's colour is ignored, its
+	// alpha and the coverage are the eraser). It punches a shape out of
+	// what is already painted — a window's rounded corners, a hole in a
+	// layer — on an alpha surface.
+	BlendDestOut
 )
 
 // Stroke describes outline stroking. Width is in user-space units and
@@ -192,7 +199,7 @@ func (p Paint) effectiveColor() Color {
 // isOpaqueSolid reports whether the paint paints every covered pixel fully
 // opaque with a single solid color (used by the rect fast paths).
 func (p Paint) isOpaqueSolid() bool {
-	if p.Shader != nil {
+	if p.Shader != nil || p.Blend != BlendSrcOver {
 		return false
 	}
 	_, _, _, a := p.effectiveColor().Premul8()

@@ -310,7 +310,10 @@ type GPUDevice struct {
 	// GL_ALPHA and read as premultiplied white.
 	locTexA8 C.GLint
 
-	window             bool
+	window bool
+	// blend is the Porter-Duff operator glBlendFunc is set to now, so a
+	// draw only changes the GL state when the paint's operator differs.
+	blend              BlendMode
 	ownEGL             bool
 	ownCtx             bool
 	closed             bool
@@ -749,6 +752,7 @@ func (d *GPUDevice) initGL() error {
 	}
 	C.glDisable(C.GL_DEPTH_TEST)
 	C.glEnable(C.GL_BLEND)
+	d.blend = BlendSrcOver
 	C.glBlendFunc(C.GL_ONE, C.GL_ONE_MINUS_SRC_ALPHA)
 	C.glEnable(C.GL_STENCIL_TEST)
 	d.Clear(Transparent)
@@ -1529,6 +1533,8 @@ func (d *GPUDevice) PresentRects(rects []Rect) error {
 		d.drawTris(d.quad)
 	}
 	C.glEnable(C.GL_BLEND)
+	d.blend = BlendSrcOver
+	C.glBlendFunc(C.GL_ONE, C.GL_ONE_MINUS_SRC_ALPHA)
 	C.glEnable(C.GL_STENCIL_TEST)
 	// The swap hint always carries this frame's own damage.
 	n = d.packEGLDamage(rects)
@@ -1814,7 +1820,26 @@ func (d *GPUDevice) shaderMode(paint Paint) int {
 	}
 }
 
+// setBlend puts the operator on the blend unit: src-over (ONE,
+// 1-SRC_ALPHA on premultiplied colour) or dest-out (ZERO, 1-SRC_ALPHA:
+// the source erases what it covers).
+func (d *GPUDevice) setBlend(mode BlendMode) {
+	if mode != BlendDestOut {
+		mode = BlendSrcOver
+	}
+	if d.blend == mode {
+		return
+	}
+	d.blend = mode
+	if mode == BlendDestOut {
+		C.glBlendFunc(C.GL_ZERO, C.GL_ONE_MINUS_SRC_ALPHA)
+		return
+	}
+	C.glBlendFunc(C.GL_ONE, C.GL_ONE_MINUS_SRC_ALPHA)
+}
+
 func (d *GPUDevice) bindProgram(mode int, paint Paint, xform Matrix, clip Clip) {
+	d.setBlend(paint.Blend)
 	C.glUseProgram(d.prog)
 	C.glUniform2f(d.locVP, C.GLfloat(d.w), C.GLfloat(d.h))
 	C.glUniform1i(d.locMode, C.GLint(mode))
@@ -2313,6 +2338,7 @@ func (d *GPUDevice) fillOpaqueRects(rects []Rect, color Color, clip Clip) {
 		C.glDisable(C.GL_SCISSOR_TEST)
 		return
 	}
+	d.setBlend(BlendSrcOver)
 	C.glUseProgram(d.prog)
 	C.glUniform2f(d.locVP, C.GLfloat(d.w), C.GLfloat(d.h))
 	C.glUniform1i(d.locMode, 0)
