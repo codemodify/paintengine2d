@@ -249,7 +249,7 @@ func (d *CPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
 			}
 			i := d.img.pixIndex(x, y)
-			blendPix(paint.Blend, d.img.Pix, i, sr, sg, sb, sa, cover)
+			blendPix(paint.Blend, d.img.Format == FormatA8, d.img.Pix, i, sr, sg, sb, sa, cover)
 		}
 	}
 }
@@ -282,6 +282,8 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 	sstride := src.RowStride()
 	spix := src.Pix
 	dpix := d.img.Pix
+	dbpp := d.img.BytesPerPixel()
+	dstA8 := d.img.Format == FormatA8
 	useMask := clip.Mask != nil
 	bpp := src.BytesPerPixel()
 	a8 := src.Format == FormatA8
@@ -297,13 +299,13 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 			if useMask {
 				m = clip.maskAt(x, y)
 				if m == 0 {
-					di += 4
+					di += dbpp
 					continue
 				}
 			}
 			sx := sx0 + (x - dx0)
 			if sx < sx0 || sx >= sxMax {
-				di += 4
+				di += dbpp
 				continue
 			}
 			si := srow + sx*bpp
@@ -315,7 +317,7 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 				sr, sg, sb, sa = spix[si+0], spix[si+1], spix[si+2], spix[si+3]
 			}
 			if sa == 0 {
-				di += 4
+				di += dbpp
 				continue
 			}
 			sr, sg, sb, sa = raster.TintPremulRGB(sr, sg, sb, sa, tr, tg, tb)
@@ -323,8 +325,8 @@ func (d *CPUDevice) blitNearest1to1(src *Image, srcRect, dstRect Rect, xform Mat
 			if mod != 255 {
 				cover = uint8((uint16(cover)*uint16(mod) + 127) / 255)
 			}
-			blendPix(paint.Blend, dpix, di, sr, sg, sb, sa, cover)
-			di += 4
+			blendPix(paint.Blend, dstA8, dpix, di, sr, sg, sb, sa, cover)
+			di += dbpp
 		}
 	}
 	return true
@@ -419,8 +421,18 @@ func (d *CPUDevice) rasterFill(paint Paint, xform Matrix, clip Clip, rule int) {
 }
 
 // blendPix composites one premultiplied source pixel with the paint's
-// operator: src-over, or dest-out, which erases what is there instead.
-func blendPix(mode BlendMode, pix []byte, i int, sr, sg, sb, sa, cover uint8) {
+// operator: src-over, or dest-out, which erases what is there instead. a8 is
+// a one-byte coverage target ([NewImageA8]), which takes alpha alone.
+func blendPix(mode BlendMode, a8 bool, pix []byte, i int, sr, sg, sb, sa, cover uint8) {
+	if a8 {
+		// A one-byte target keeps coverage only: a mask has no colour.
+		if mode == BlendDestOut {
+			raster.BlendDestOutA8(pix, i, sa, cover)
+			return
+		}
+		raster.BlendSrcOverA8(pix, i, sa, cover)
+		return
+	}
 	if mode == BlendDestOut {
 		raster.BlendDestOut(pix, i, sa, cover)
 		return
@@ -430,7 +442,8 @@ func blendPix(mode BlendMode, pix []byte, i int, sr, sg, sb, sa, cover uint8) {
 
 func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid bool, sr, sg, sb, sa uint8, paint Paint, xform Matrix) {
 	pix := d.img.Pix
-	if clip.Mask == nil && solid && paint.Blend == BlendSrcOver {
+	a8 := d.img.Format == FormatA8
+	if clip.Mask == nil && solid && paint.Blend == BlendSrcOver && !a8 {
 		for x := x0; x < x1; x++ {
 			c := cover[x]
 			if c == 0 {
@@ -463,7 +476,7 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 		}
 		i := d.img.pixIndex(x, y)
 		if solid {
-			blendPix(paint.Blend, pix, i, sr, sg, sb, sa, uint8(c))
+			blendPix(paint.Blend, a8, pix, i, sr, sg, sb, sa, uint8(c))
 			continue
 		}
 		col := paint.Shader.Shade(float32(x)+0.5, float32(y)+0.5, xform)
@@ -474,7 +487,7 @@ func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid boo
 		if aa == 0 {
 			continue
 		}
-		blendPix(paint.Blend, pix, i, rr, gg, bb, aa, uint8(c))
+		blendPix(paint.Blend, a8, pix, i, rr, gg, bb, aa, uint8(c))
 	}
 }
 
@@ -580,13 +593,21 @@ func (d *CPUDevice) fillDeviceRect(r Rect, paint Paint, xform Matrix, clip Clip,
 			return
 		}
 		pix := d.img.Pix
-		rowBytes := (ix1 - ix0) * 4
+		bpp := d.img.BytesPerPixel()
+		rowBytes := (ix1 - ix0) * bpp
 		i0 := d.img.pixIndex(ix0, iy0)
-		fillRGBA(pix, i0, rowBytes, sr, sg, sb, sa)
+		if d.img.Format == FormatA8 {
+			row := pix[i0 : i0+rowBytes]
+			for i := range row {
+				row[i] = sa
+			}
+		} else {
+			fillRGBA(pix, i0, rowBytes, sr, sg, sb, sa)
+		}
 		src := pix[i0 : i0+rowBytes]
 		stride := d.img.RowStride()
 		for y := iy0 + 1; y < iy1; y++ {
-			copy(pix[y*stride+ix0*4:y*stride+ix0*4+rowBytes], src)
+			copy(pix[y*stride+ix0*bpp:y*stride+ix0*bpp+rowBytes], src)
 		}
 		return
 	}

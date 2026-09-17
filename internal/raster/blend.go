@@ -50,6 +50,37 @@ func BlendDestOut(dst []byte, i int, sa, cover uint8) {
 	dst[i+3] = mul255(dst[i+3], inv)
 }
 
+// BlendSrcOverA8 is [BlendSrcOver] for a one-byte coverage destination: only
+// the source's alpha matters, because a coverage mask carries no colour.
+func BlendSrcOverA8(dst []byte, i int, sa, cover uint8) {
+	if cover == 0 {
+		return
+	}
+	if cover != 255 {
+		sa = mul255(sa, cover)
+	}
+	if sa == 255 {
+		dst[i] = 255
+		return
+	}
+	dst[i] = sa + mul255(dst[i], uint8(255-sa))
+}
+
+// BlendDestOutA8 is [BlendDestOut] for a one-byte coverage destination.
+func BlendDestOutA8(dst []byte, i int, sa, cover uint8) {
+	if cover == 0 || sa == 0 {
+		return
+	}
+	if cover != 255 {
+		sa = mul255(sa, cover)
+	}
+	if sa == 255 {
+		dst[i] = 0
+		return
+	}
+	dst[i] = mul255(dst[i], uint8(255-sa))
+}
+
 func mul255(a, b uint8) uint8 {
 	return uint8((uint16(a)*uint16(b) + 127) / 255)
 }
