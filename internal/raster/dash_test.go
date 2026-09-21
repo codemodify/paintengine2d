@@ -34,7 +34,7 @@ func TestSampleNearestInBounds(t *testing.T) {
 		t.Fatalf("nearest %d %d %d %d", r, g, b, a)
 	}
 	r, g, b, a = SampleNearestPremul(pix, 2, 1, 8, -1, 0)
-	if r|g|b|a != 0 {
-		t.Fatal("outside")
+	if r != 10 || g != 20 || b != 30 || a != 40 {
+		t.Fatalf("outside should clamp to the edge texel, got %d %d %d %d", r, g, b, a)
 	}
 }
