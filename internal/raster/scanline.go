@@ -72,6 +72,11 @@ type Rasterizer struct {
 	active []int32
 	isects []isect
 	cover  []uint16
+	// run holds the whole pixels of a row's spans as a difference array:
+	// +weight where a span's interior starts, -weight where it ends,
+	// summed once per row rather than added pixel by pixel for each of
+	// the SamplesY sub-scanlines.
+	run []int32
 
 	cursor  int // next index into order not yet admitted
 	nextRow int // row the active list is primed for
@@ -234,6 +239,12 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 	}
 	// Only the clip span is read by the blender; skip O(surface width) work.
 	clear(r.cover[clipX0:clipX1])
+	if cap(r.run) < width+1 {
+		r.run = make([]int32, width+1)
+	} else {
+		r.run = r.run[:width+1]
+	}
+	clear(r.run[clipX0 : clipX1+1])
 
 	r.syncActive(y)
 	if len(r.active) == 0 {
@@ -271,14 +282,19 @@ func (r *Rasterizer) CoverageRow(y, width int, rule int, clipX0, clipX1 int) []u
 			if x1 <= x0 {
 				continue
 			}
-			addSpan(r.cover, x0, x1, weight, clipX0, clipX1)
+			addSpan(r.cover, r.run, x0, x1, weight, clipX0, clipX1)
 		}
 	}
-	// Clamp to 255 inside the clip span only.
+	// Fold the spans' whole pixels in, and clamp to 255 inside the clip
+	// span only.
+	var acc int32
 	for i := clipX0; i < clipX1; i++ {
-		if r.cover[i] > 255 {
-			r.cover[i] = 255
+		acc += r.run[i]
+		c := int32(r.cover[i]) + acc
+		if c > 255 {
+			c = 255
 		}
+		r.cover[i] = uint16(c)
 	}
 	return r.cover
 }
@@ -381,7 +397,7 @@ func addCov(cover []uint16, i int, v uint16) {
 	cover[i] = c
 }
 
-func addSpan(cover []uint16, x0, x1 float32, weight, clipX0, clipX1 int) {
+func addSpan(cover []uint16, run []int32, x0, x1 float32, weight, clipX0, clipX1 int) {
 	if !(x1 > x0) { // NaN-safe
 		return
 	}
@@ -413,8 +429,9 @@ func addSpan(cover []uint16, x0, x1 float32, weight, clipX0, clipX1 int) {
 	if end > clipX1 {
 		end = clipX1
 	}
-	for x := start; x < end; x++ {
-		addCov(cover, x, uint16(weight))
+	if end > start {
+		run[start] += int32(weight)
+		run[end] -= int32(weight)
 	}
 	if ix1 >= clipX0 && ix1 < clipX1 {
 		frac := x1 - float32(ix1)

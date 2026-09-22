@@ -443,6 +443,23 @@ func blendPix(mode BlendMode, a8 bool, pix []byte, i int, sr, sg, sb, sa, cover 
 func (d *CPUDevice) blendRow(y, x0, x1 int, cover []uint16, clip Clip, solid bool, sr, sg, sb, sa uint8, paint Paint, xform Matrix) {
 	pix := d.img.Pix
 	a8 := d.img.Format == FormatA8
+	if a8 && clip.Mask == nil && solid && paint.Blend == BlendSrcOver {
+		// A coverage mask being drawn (a window's silhouette, a glyph
+		// sheet): one byte a pixel, src-over on alpha alone, straight
+		// along the row.
+		row := pix[y*d.img.RowStride():]
+		for x := x0; x < x1; x++ {
+			c := cover[x]
+			if c == 0 {
+				continue
+			}
+			if c > 255 {
+				c = 255
+			}
+			raster.BlendSrcOverA8(row, x, sa, uint8(c))
+		}
+		return
+	}
 	if clip.Mask == nil && solid && paint.Blend == BlendSrcOver && !a8 {
 		for x := x0; x < x1; x++ {
 			c := cover[x]
