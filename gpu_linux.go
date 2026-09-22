@@ -179,6 +179,21 @@ static void pe_attrib(GLuint index, GLsizei stride, size_t offset) {
 	glVertexAttribPointer(index, 2, GL_FLOAT, GL_FALSE, stride, (const void *)offset);
 }
 
+// pe_draw_tris uploads n floats of (x, y, u, v) vertices into vbo and
+// draws them as triangles: the eight GL calls of a draw in one crossing
+// from Go into C instead of eight.
+static void pe_draw_tris(GLuint vbo, const float *verts, int n) {
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)n * 4, verts, GL_STREAM_DRAW);
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	pe_attrib(0, 16, 0);
+	pe_attrib(1, 16, 8);
+	glDrawArrays(GL_TRIANGLES, 0, n / 4);
+	glDisableVertexAttribArray(0);
+	glDisableVertexAttribArray(1);
+}
+
 static EGLDisplay pe_display_from_ptr(uintptr_t native, EGLenum platform) {
 	return pe_get_display(native ? (void *)native : NULL, platform);
 }
@@ -2305,17 +2320,10 @@ func (d *GPUDevice) drawTris(verts []float32) {
 	if len(verts) < 12 {
 		return
 	}
-	C.glBindBuffer(C.GL_ARRAY_BUFFER, d.vbo)
-	C.glBufferData(C.GL_ARRAY_BUFFER, C.GLsizeiptr(len(verts)*4), unsafe.Pointer(&verts[0]), C.GL_STREAM_DRAW)
-	C.glEnableVertexAttribArray(0)
-	C.glEnableVertexAttribArray(1)
-	// Attribute offsets go through C: unsafe.Pointer(uintptr(8)) is not a
-	// valid Go pointer (go vet flags it, -race checkptr aborts on it).
-	C.pe_attrib(0, 16, 0)
-	C.pe_attrib(1, 16, 8)
-	C.glDrawArrays(C.GL_TRIANGLES, 0, C.GLsizei(len(verts)/4))
-	C.glDisableVertexAttribArray(0)
-	C.glDisableVertexAttribArray(1)
+	// One call into C for the whole draw; the attribute offsets are set
+	// there too (unsafe.Pointer(uintptr(8)) is not a valid Go pointer: go
+	// vet flags it, -race checkptr aborts on it).
+	C.pe_draw_tris(d.vbo, (*C.float)(unsafe.Pointer(&verts[0])), C.int(len(verts)))
 	d.markDrawn()
 }
 
