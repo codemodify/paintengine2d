@@ -96,8 +96,11 @@ func TintPremulRGB(sr, sg, sb, sa, tr, tg, tb uint8) (r, g, b, a uint8) {
 }
 
 // SampleBilinearPremul samples a premul RGBA buffer with bilinear filtering.
-// Pixels outside [0,w)×[0,h) are treated as transparent. stride is bytes/row
-// (0 or < w*4 means packed).
+// A sample reaching past [0,w)×[0,h) reads the nearest edge pixel — clamp to
+// edge, which is what the GPU's GL_CLAMP_TO_EDGE textures do — so an image
+// scaled up keeps its edge colour to its edge instead of fading toward
+// transparent over the last half pixel. stride is bytes/row (0 or < w*4
+// means packed).
 func SampleBilinearPremul(pix []byte, w, h, stride int, x, y float32) (r, g, b, a uint8) {
 	if w <= 0 || h <= 0 {
 		return
@@ -145,7 +148,8 @@ func SampleBilinearPremul(pix []byte, w, h, stride int, x, y float32) (r, g, b, 
 }
 
 // SampleNearestPremul returns the premul pixel covering (x, y) in pixel
-// space (pixel i covers [i, i+1)). Outside is transparent.
+// space (pixel i covers [i, i+1)), clamped to the edge like
+// [SampleBilinearPremul].
 func SampleNearestPremul(pix []byte, w, h, stride int, x, y float32) (r, g, b, a uint8) {
 	if w <= 0 || h <= 0 {
 		return
@@ -211,19 +215,34 @@ func SampleNearestA8(pix []byte, w, h, stride int, x, y float32) uint8 {
 	return coverAt(pix, w, h, stride, mathFloor32(x), mathFloor32(y))
 }
 
+// coverAt and pixelAt read one texel, clamped to the image's edge.
+//
+// Clamping is the sampler's contract, not a convenience: a bilinear sample
+// half a texel inside the edge weighs the texel beyond it, and treating that
+// texel as transparent faded every scaled image's outermost pixels — a pale
+// seam down the middle of a stretched nine-slice, where the middle meets the
+// fixed edges. The GPU has always clamped (GL_CLAMP_TO_EDGE); this is the CPU
+// doing the same, so the two agree.
 func coverAt(pix []byte, w, h, stride, x, y int) uint8 {
-	if x < 0 || y < 0 || x >= w || y >= h {
-		return 0
-	}
+	x, y = clampTexel(x, w), clampTexel(y, h)
 	return pix[y*stride+x]
 }
 
 func pixelAt(pix []byte, w, h, stride, x, y int) (r, g, b, a uint8) {
-	if x < 0 || y < 0 || x >= w || y >= h {
-		return
-	}
+	x, y = clampTexel(x, w), clampTexel(y, h)
 	i := y*stride + x*4
 	return pix[i+0], pix[i+1], pix[i+2], pix[i+3]
+}
+
+// clampTexel keeps a texel index inside [0, n).
+func clampTexel(v, n int) int {
+	if v < 0 {
+		return 0
+	}
+	if v >= n {
+		return n - 1
+	}
+	return v
 }
 
 func mathFloor32(v float32) int {

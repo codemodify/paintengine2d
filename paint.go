@@ -60,6 +60,15 @@ const (
 )
 
 // FilterMode selects image resampling for [Context.DrawImageRect] / [Device.Blit].
+//
+// Both filters clamp to the image's edge, on the CPU and the GPU alike: a
+// sample that reaches past the image reads its nearest edge texel, never
+// transparent. An image drawn larger than itself therefore keeps its edge
+// colour to its edge, and an image cut into pieces (a nine-slice) meets
+// itself without a seam. A sub-rect of a larger image is not clamped to the
+// sub-rect — a bilinear sample at its edge still weighs the texel beside it —
+// so art that must not bleed into its neighbours is drawn from an image of
+// its own.
 type FilterMode uint8
 
 const (
