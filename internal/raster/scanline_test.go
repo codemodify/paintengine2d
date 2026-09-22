@@ -104,3 +104,72 @@ func TestMergeIsectsCombinesDirs(t *testing.T) {
 		t.Fatalf("zero-dir pair should drop, got %+v", out)
 	}
 }
+
+// naiveCoverageRow is CoverageRow as it was written first: every whole
+// pixel of every span added once for each sub-scanline. The difference
+// array must give exactly the same coverage.
+func naiveCoverageRow(r *Rasterizer, y, width, rule, clipX0, clipX1 int) []uint16 {
+	cover := make([]uint16, width)
+	r.syncActive(y)
+	for s := 0; s < SamplesY; s++ {
+		yy := float32(y) + (float32(s)+0.5)/SamplesY
+		var xs []isect
+		for _, i := range r.active {
+			e := &r.edges[i]
+			if yy < e.Y0 || yy >= e.Y1 {
+				continue
+			}
+			xs = append(xs, isect{x: r.xAtFast(i, yy), dir: e.Dir})
+		}
+		if len(xs) < 2 {
+			continue
+		}
+		sortIsects(xs)
+		xs = mergeIsects(xs)
+		wind := 0
+		for i := 0; i < len(xs)-1; i++ {
+			wind += int(xs[i].dir)
+			if !filled(wind, rule) || xs[i+1].x <= xs[i].x {
+				continue
+			}
+			x0, x1 := max(xs[i].x, float32(clipX0)), min(xs[i+1].x, float32(clipX1))
+			for x := clipX0; x < clipX1; x++ {
+				lo, hi := max(x0, float32(x)), min(x1, float32(x+1))
+				if hi > lo {
+					cover[x] += uint16((hi - lo) * float32(256/SamplesY))
+				}
+			}
+		}
+	}
+	for i := range cover {
+		cover[i] = min(cover[i], 255)
+	}
+	return cover
+}
+
+func TestCoverageRowMatchesSpanBySpan(t *testing.T) {
+	// A ring with a hole, filled even-odd, and a star filled nonzero:
+	// partial pixels, whole runs, and spans that start and end mid-row.
+	star := []Vec2{{50, 2}, {61, 38}, {98, 38}, {68, 60}, {80, 97}, {50, 74}, {20, 97}, {32, 60}, {2, 38}, {39, 38}, {50, 2}}
+	ring := [][]Vec2{
+		{{3.3, 4.7}, {96.2, 4.7}, {96.2, 95.1}, {3.3, 95.1}, {3.3, 4.7}},
+		{{30.5, 30.25}, {70.75, 30.25}, {70.75, 70.5}, {30.5, 70.5}, {30.5, 30.25}},
+	}
+	for _, c := range []struct {
+		poly [][]Vec2
+		rule int
+	}{{[][]Vec2{star}, 0}, {ring, 1}} {
+		var got, want Rasterizer
+		got.ResetEdges(BuildEdges(c.poly, nil))
+		want.ResetEdges(BuildEdges(c.poly, nil))
+		for y := 0; y < 100; y++ {
+			g := got.CoverageRow(y, 100, c.rule, 0, 100)
+			w := naiveCoverageRow(&want, y, 100, c.rule, 0, 100)
+			for x := range w {
+				if d := int(g[x]) - int(w[x]); d < -1 || d > 1 {
+					t.Fatalf("rule %d row %d px %d: %d, span by span %d", c.rule, y, x, g[x], w[x])
+				}
+			}
+		}
+	}
+}
