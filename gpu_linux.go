@@ -403,6 +403,13 @@ type gpuTex struct {
 	bytes int
 	epoch uint64
 	used  uint64
+	// filter is the sampling this texture's own parameters are set to.
+	//
+	// In GLES2 sampling lives on the texture object, not in the draw call,
+	// so a cached texture keeps whatever filter it was *created* with until
+	// something changes it. Recorded here so a draw that wants the other one
+	// can (see setTexFilter).
+	filter FilterMode
 }
 
 // eglDisplayRef refcounts one native EGL display. eglTerminate tears down
@@ -2035,10 +2042,12 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 		if e.w == src.Width && e.h == src.Height && e.nbytes == len(src.Pix) {
 			e.used = d.texClock
 			if e.epoch == src.Epoch {
+				d.setTexFilter(e, filter)
 				return e.id
 			}
 			if d.uploadDirty(src, e.id) {
 				e.epoch = src.Epoch
+				d.setTexFilter(e, filter)
 				return e.id
 			}
 		}
@@ -2047,10 +2056,7 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 	var id C.GLuint
 	C.glGenTextures(1, &id)
 	C.glBindTexture(C.GL_TEXTURE_2D, id)
-	minF := C.GLint(C.GL_LINEAR)
-	if filter == FilterNearest {
-		minF = C.GL_NEAREST
-	}
+	minF := glFilter(filter)
 	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_MIN_FILTER, minF)
 	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_MAG_FILTER, minF)
 	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_WRAP_S, C.GL_CLAMP_TO_EDGE)
@@ -2079,10 +2085,46 @@ func (d *GPUDevice) uploadImage(src *Image, filter FilterMode) C.GLuint {
 	d.texCache[key] = &gpuTex{
 		id: id, w: src.Width, h: src.Height,
 		nbytes: len(src.Pix), bytes: bytes, epoch: src.Epoch, used: d.texClock,
+		filter: filter,
 	}
 	d.texBytes += bytes
 	d.evictTextures()
 	return id
+}
+
+// glFilter is the GL sampling constant for a FilterMode. One mapping, so the
+// texture a draw creates and the texture a draw re-samples cannot disagree.
+func glFilter(filter FilterMode) C.GLint {
+	if filter == FilterNearest {
+		return C.GL_NEAREST
+	}
+	return C.GL_LINEAR
+}
+
+// setTexFilter brings a cached texture's sampling to what this draw asked for.
+//
+// Sampling is state on the texture object in GLES2, not part of the draw call,
+// so a cached texture went on sampling the way it was first created however
+// the caller asked for it afterwards. Nothing re-applied it on a cache hit: an
+// unchanged image blitted once with FilterBilinear and then again with
+// FilterNearest came back blended the second time — 144 blended pixels across
+// a 12x12 checkerboard interior that holds only black and white — and
+// starting with nearest gave none, which is what made it look like a blur in
+// the caller rather than a cache that ignores half its key.
+//
+// Both filters are legitimately wanted for one image: an ImagePattern always
+// asks for nearest so a dither stays crisp, while a Blit asks for whatever its
+// paint says. A caller should not have to keep two copies of an image to get
+// two samplings of it.
+func (d *GPUDevice) setTexFilter(e *gpuTex, filter FilterMode) {
+	if e == nil || e.filter == filter {
+		return
+	}
+	C.glBindTexture(C.GL_TEXTURE_2D, e.id)
+	f := glFilter(filter)
+	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_MIN_FILTER, f)
+	C.glTexParameteri(C.GL_TEXTURE_2D, C.GL_TEXTURE_MAG_FILTER, f)
+	e.filter = filter
 }
 
 // dropTex deletes one cached texture.

@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.11.1 — 2026-10-06
+
+One fix, reported by an application through the toolkit above this one.
+
+### Fixed
+
+- **A cached texture samples the way the draw asks, not the way the first
+  draw asked.** Sampling is state on the texture object in GLES2, not part of
+  the draw call, so a texture kept whatever filter it was *created* with:
+  `uploadImage` passed the requested filter to the texture it made and
+  returned a cache hit without touching it. An unchanged image blitted once
+  with `FilterBilinear` and then again with `FilterNearest` came back
+  blended — 144 blended pixels across a 12x12 checkerboard interior that
+  holds only black and white — while starting with nearest gave none, which
+  made it look like a blur in the caller rather than a cache ignoring half of
+  what it was asked.
+
+  Both filters are legitimately wanted for one image: an `ImagePattern`
+  always asks for nearest so a dither stays crisp, while `Blit` asks for
+  whatever its paint says. The cache entry records the filter its texture is
+  set to and a draw that wants the other one re-applies it. A caller that
+  kept two copies of an image to get two samplings of it no longer needs to.
+
 ## 0.11.0 — 2026-09-13
 
 Correctness pass over the rasterizer, the dirty-rect replay and the GPU
