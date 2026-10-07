@@ -2,6 +2,47 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.12.0 — 2026-10-06
+
+A picture this engine did not draw.
+
+### Added — foreign textures
+
+- **[ForeignTexture], and a [Device] that can blit one.** [Device.Blit] takes
+  an [Image], which is CPU memory by definition, so content rendered on the GPU
+  by something else had to come back down and go up again: a video frame cost
+  three copies and a full texture upload *every frame* — the decoder rasterizes
+  into its own buffer, the application copies that into Go memory, the engine
+  copies it into a texture. At 1280x720 and 60 frames a second that is about
+  210 MB/s of upload, and it is why an application that plays video caps its
+  render size.
+
+  [GPUDevice.NewForeignTarget] gives the caller a texture and a framebuffer on
+  the device's own GL context to render into — `FBO` is what libmpv's
+  `MPV_RENDER_PARAM_OPENGL_FBO` takes — and [Context.DrawForeign] draws it as an
+  **ordinary blit**, with the same transform, clip, tint and global alpha as
+  anything else. Nothing is copied. A frame that composited by another route
+  would composite differently from the interface over it.
+
+  New: [ForeignTexture], [ForeignTexture.Valid], [SupportsForeign],
+  [NewForeignTarget], [Context.DrawForeign], [Context.DrawForeignPaint],
+  [GPUDevice.NewForeignTarget], [GPUDevice.AdoptTexture],
+  [GPUDevice.ClearForeign], [GPUDevice.ReleaseForeign],
+  [ErrForeignUnsupported].
+
+  Two rules, both in the doc comments: render into it with the device's context
+  current on the device's thread (commands on one context are ordered, so a
+  blit after the caller's draws sees them — **no fence is needed and none is
+  offered**, because a fence is only for a second context); and it does not
+  outlive the device, which [ForeignTexture.Valid] reports and a blit refuses.
+
+  `BlitForeign` and `NewForeignTarget` are **optional** methods, type-asserted
+  rather than added to [Device], so every existing backend stays
+  source-compatible — the rule ClearRect, Present and Scroll already follow.
+  [SupportsForeign] is how a caller chooses *before* building a renderer, since
+  the CPU backend, a recorder, and a window whose GPU never started cannot take
+  one.
+
 ## 0.11.1 — 2026-10-06
 
 One fix, reported by an application through the toolkit above this one.

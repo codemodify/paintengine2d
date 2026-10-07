@@ -376,6 +376,10 @@ type GPUDevice struct {
 	maskPix   []byte
 	eglDamage []C.EGLint
 
+	// foreign are the render targets handed to callers, so they can be
+	// deleted with the context and marked dead for anyone still holding one.
+	foreign []*ForeignTexture
+
 	texCache  map[uint64]*gpuTex
 	texBytes  int
 	texBudget int
@@ -924,6 +928,7 @@ func (d *GPUDevice) freeTarget() {
 }
 
 func (d *GPUDevice) destroyGL() {
+	d.dropForeign()
 	d.freeTarget()
 	d.freeBlur()
 	if d.vbo != 0 {
@@ -1229,8 +1234,25 @@ func (d *GPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 		C.glDisable(C.GL_SCISSOR_TEST)
 		return
 	}
+	d.drawTexQuad(tex, src.Width, src.Height, src.Format == FormatA8, false,
+		srcRect, dstRect, xform, paint, clip, tr, tg, tb, ta)
+}
+
+// drawTexQuad is the textured-quad half of a blit: one GL texture, a source
+// box in its own pixels, a destination box in user space.
+//
+// Shared by [GPUDevice.Blit], which uploads the texture from an [Image], and
+// [GPUDevice.BlitForeign], which is handed one the caller rendered into. The
+// blending, the clip, the tint, the stencil state and the scissor teardown are
+// the same for both, and a foreign texture that took a path of its own would
+// composite differently from everything around it.
+//
+// flipped swaps the V coordinates, for a texture whose rows run bottom-up.
+func (d *GPUDevice) drawTexQuad(tex C.GLuint, texW, texH int, a8, flipped bool,
+	srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip,
+	tr, tg, tb, ta uint8) {
 	d.bindProgram(3, paint, xform, clip)
-	if src.Format == FormatA8 {
+	if a8 {
 		C.glUniform1i(d.locTexA8, 1)
 	}
 	C.glUniform4f(d.locTint, C.GLfloat(tr)/255, C.GLfloat(tg)/255, C.GLfloat(tb)/255, C.GLfloat(ta)/255)
@@ -1242,10 +1264,13 @@ func (d *GPUDevice) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint 
 	p1 := xform.Transform(Point{dstRect.Max.X, dstRect.Min.Y})
 	p2 := xform.Transform(dstRect.Max)
 	p3 := xform.Transform(Point{dstRect.Min.X, dstRect.Max.Y})
-	su0 := srcRect.Min.X / float32(src.Width)
-	sv0 := srcRect.Min.Y / float32(src.Height)
-	su1 := srcRect.Max.X / float32(src.Width)
-	sv1 := srcRect.Max.Y / float32(src.Height)
+	su0 := srcRect.Min.X / float32(texW)
+	sv0 := srcRect.Min.Y / float32(texH)
+	su1 := srcRect.Max.X / float32(texW)
+	sv1 := srcRect.Max.Y / float32(texH)
+	if flipped {
+		sv0, sv1 = sv1, sv0
+	}
 	d.quad = append(d.quad[:0],
 		p0.X, p0.Y, su0, sv0,
 		p1.X, p1.Y, su1, sv0,

@@ -1,3 +1,5 @@
+//go:build linux && cgo
+
 package paintengine2d
 
 import "testing"
