@@ -1,13 +1,31 @@
 package paintengine2d
 
-import "testing"
+import (
+	"os"
+	"regexp"
+	"testing"
+)
 
 // Hooks a forthcoming retained UI framework will call. No widgets here —
 // just the canvas queries and the paint-cycle shape.
 
-func TestVersionIsFoundationReady(t *testing.T) {
-	if Version != "0.11.0" {
-		t.Fatalf("Version %q, want 0.11.0 correctness pass / group clips", Version)
+// Version is what the newest released heading in the changelog says, and
+// nothing else. It used to be pinned to a literal here, so cutting 0.12.0
+// left the constant reading 0.11.0 — the release had no reason to come
+// and edit a test about foundations. Reading the changelog instead means
+// the next release cannot forget.
+func TestVersionIsTheNewestReleaseInTheChangelog(t *testing.T) {
+	log, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`(?m)^## ([0-9]+\.[0-9]+\.[0-9]+) `)
+	m := re.FindSubmatch(log)
+	if m == nil {
+		t.Fatal("no released heading in CHANGELOG.md")
+	}
+	if got := string(m[1]); got != Version {
+		t.Errorf("Version is %q and the newest release in the changelog is %q", Version, got)
 	}
 }
 
