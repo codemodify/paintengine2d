@@ -344,7 +344,8 @@ type GPUDevice struct {
 	info               string
 	scrollTex          C.GLuint
 	scrollTW, scrollTH int
-	blur               gpuBlur // backdrop blur program and scratch targets
+	blur               gpuBlur    // backdrop blur program and scratch targets
+	refract            gpuRefract // backdrop refraction program (borrows blur's targets)
 
 	// pixels is the CPU copy Snapshot reads the frame into, made by the
 	// first Snapshot: a device-size image (12.5 MB at 2240×1400) that only

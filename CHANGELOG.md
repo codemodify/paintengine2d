@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added — the edge of a pane of glass
+
+- **[BackdropRefractor], and [Context.BackdropRefract].** Blur alone gives
+  frosted material: acrylic, vibrancy. What separates *glass* from frosting is
+  that a pane has thickness, so what lies behind it is bent where the pane
+  curves away at its edge and left alone through the middle. Blurring and
+  tinting could not produce that at all, and a toolkit's glass looks painted
+  without it.
+
+  `ctx.BackdropRefract(r, corner, depth)` resamples what is already drawn under
+  a rounded rect as that edge would have bent it: nothing through the flat
+  middle, and most in the last few pixels, where the content is squeezed and
+  drawn inwards along the shape's own normal. `depth` is the bevel's thickness
+  in user units and is the one number deciding whether the glass reads as a
+  thin sheet or a thick slab.
+
+  Blur first and refract after — a pane frosts what is behind it *and* bends
+  it, and bending an image that has already scattered is what a real pane does.
+
+  Implemented on the CPU (a copy, then a per-pixel resample off the rounded-rect
+  distance field) and on the GPU (one pass that discards the flat middle rather
+  than writing it back unchanged, borrowing the blur's scratch targets since the
+  two never run at once). It is an optional interface found by type assertion,
+  exactly as [BackdropBlurrer] is, so [Device] is unchanged and a device that
+  cannot refract ignores it — a look must still read without it.
+
 ## 0.12.0 — 2026-10-06
 
 A picture this engine did not draw.
