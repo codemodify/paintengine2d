@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.12.2 — 2026-10-11
+
+### Fixed — a foreign texture survives retained painting
+
+- **[Recorder] can carry a foreign draw.** Recording and replaying is a
+  toolkit's default painting path, so a widget is handed a context over a
+  recorder rather than over the window's device — and a foreign draw that
+  worked only on an immediate context was a feature unreachable from the one
+  place it was built for. media-player-video reported it: the same texture
+  drew immediately and produced nothing recorded, and [SupportsForeign]
+  answered false for the context the widget actually had.
+
+  The optional interface asked for both halves at once, so a device had to
+  draw a foreign texture *and* allocate one, or neither. They are different
+  capabilities — allocating needs a GL context and drawing does not — and
+  split in two a recorder implements the drawing half alone. The scene
+  performs the blit on replay, and checks the texture again there: a scene
+  outlives the frame that recorded it, and the GL name behind it can be
+  released in between.
+
+  [SupportsForeign] is now true for a recorder, which is the answer a widget
+  asking about its own context needs. [NewForeignTarget] still requires a
+  device that owns a context.
+
 ## 0.12.1 — 2026-10-10
 
 ### Added — the edge of a pane of glass
