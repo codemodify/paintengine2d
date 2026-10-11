@@ -236,6 +236,30 @@ func (r *Recorder) Blit(src *Image, srcRect, dstRect Rect, xform Matrix, paint P
 	r.add(op)
 }
 
+// BlitForeign implements the foreign-blit half of the optional API: the
+// draw is recorded and performed when the scene is replayed on a device
+// that can take a foreign texture.
+//
+// A recorder cannot make such a texture — that needs a GL context — so
+// it is only the drawing half. The texture is held by pointer and
+// checked again at replay: a scene outlives the frame that recorded it.
+func (r *Recorder) BlitForeign(t *ForeignTexture, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip) {
+	if r == nil || !t.Valid() || dstRect.Empty() || !xform.Finite() {
+		return
+	}
+	op := r.newOp()
+	*op = drawOp{
+		kind:    opForeign,
+		foreign: t,
+		srcR:    srcRect,
+		dstR:    dstRect,
+		xform:   xform,
+		paint:   clonePaint(paint),
+		clip:    cloneClip(clip),
+	}
+	r.add(op)
+}
+
 // BackdropBlur implements [BackdropBlurrer]: the blur is replayed on the
 // target device, and every group up to the root is marked so damage over
 // its region repaints the whole region first.

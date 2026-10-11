@@ -72,6 +72,16 @@ func (t *ForeignTexture) Valid() bool {
 // the same rule ClearRect, Present and Scroll follow.
 type foreignBlitter interface {
 	BlitForeign(t *ForeignTexture, srcRect, dstRect Rect, xform Matrix, paint Paint, clip Clip)
+}
+
+// foreignTargeter is the other half: making the texture.
+//
+// Drawing one and allocating one are different capabilities and used to
+// be one interface, so a device had to do both or neither. That left a
+// [Recorder] out — and a recorder is exactly what a retained painting
+// path hands a widget, so the feature was unreachable from the place it
+// was built for.
+type foreignTargeter interface {
 	NewForeignTarget(w, h int) (*ForeignTexture, error)
 }
 
@@ -79,9 +89,14 @@ type foreignBlitter interface {
 //
 // Ask *before* setting a decoder up, not per frame: a renderer has to be
 // built one way or the other at the start, and the answer is a property of
-// the window's paint device. It is false for the CPU backend, for a recorder,
-// and for a window whose GPU never started or was lost — so an application
-// that offers a GPU path still needs its CPU one, and this is how it chooses.
+// the window's paint device. It is false for the CPU backend and for a
+// window whose GPU never started or was lost — so an application that
+// offers a GPU path still needs its CPU one, and this is how it chooses.
+//
+// It is **true for a [Recorder]**, which carries the draw into the scene
+// and performs it when that scene is replayed on a device that can.
+// Retained painting is the default, so a widget asking this of the
+// context it was handed is asking the right question.
 func SupportsForeign(dev Device) bool {
 	if dev == nil {
 		return false
@@ -96,8 +111,10 @@ func SupportsForeign(dev Device) bool {
 // It is [GPUDevice.NewForeignTarget] through the [Device] interface, so a
 // caller holding whatever the toolkit gave it does not have to type-assert.
 func NewForeignTarget(dev Device, w, h int) (*ForeignTexture, error) {
-	fb, ok := dev.(foreignBlitter)
+	fb, ok := dev.(foreignTargeter)
 	if !ok {
+		// A recorder can carry a foreign draw but cannot make the
+		// texture: that needs the GL context a window owns.
 		return nil, ErrForeignUnsupported
 	}
 	return fb.NewForeignTarget(w, h)

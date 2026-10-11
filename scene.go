@@ -256,6 +256,7 @@ const (
 	opStroke
 	opBlit
 	opBackdrop
+	opForeign
 )
 
 type drawOp struct {
@@ -267,7 +268,8 @@ type drawOp struct {
 	src        *Image
 	srcR, dstR Rect
 	color      Color
-	radius     float32 // opBackdrop: the blur's standard deviation, user units
+	radius     float32         // opBackdrop: the blur's standard deviation, user units
+	foreign    *ForeignTexture // opForeign: the texture to blit
 }
 
 func (*drawOp) sceneNode() {}
@@ -455,6 +457,17 @@ func (w *sceneWalker) walk(n Node, acc Matrix) {
 			}
 			w.flush()
 			b.BackdropBlur(t.dstR, acc.Mul(t.xform), t.radius, w.clipOp(t.clip, acc))
+		case opForeign:
+			// Checked again here, not only where it was recorded: a scene
+			// outlives the frame that built it, and the GL object behind
+			// the texture can be released, or its device lost, in
+			// between. Drawing a dead name is a GL error at best.
+			fb, ok := w.dev.(foreignBlitter)
+			if !ok || !t.foreign.Valid() || w.skipRect(opDeviceBounds(t, acc)) {
+				return
+			}
+			w.flush()
+			fb.BlitForeign(t.foreign, t.srcR, t.dstR, acc.Mul(t.xform), t.paint, w.clipOp(t.clip, acc))
 		}
 	}
 }
@@ -738,7 +751,7 @@ func opContentBounds(op *drawOp, acc Matrix) Rect {
 			return Rect{}
 		}
 		return xf.TransformRect(strokePadBounds(op.path.Bounds(), op.paint.Stroke))
-	case opBlit, opBackdrop:
+	case opBlit, opBackdrop, opForeign:
 		return xf.TransformRect(op.dstR)
 	default:
 		return Rect{}
